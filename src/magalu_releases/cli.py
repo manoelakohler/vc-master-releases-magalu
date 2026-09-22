@@ -18,6 +18,7 @@ import json
 import sys
 from dataclasses import asdict
 from dataclasses import replace as replace_documento
+from datetime import datetime, timezone
 from pathlib import Path
 
 from magalu_releases.analise.series import construir_series
@@ -72,6 +73,13 @@ def construir_parser() -> argparse.ArgumentParser:
 
     relatar = sub.add_parser("relatar", help="Fase C: séries, variações, Excel e auditoria")
     relatar.add_argument("--run", required=True, help="diretório da execução")
+
+    artefato = sub.add_parser(
+        "registrar-artefato",
+        help="Guarda na execução a URL do dashboard publicado como artefato",
+    )
+    artefato.add_argument("--run", required=True, help="diretório da execução")
+    artefato.add_argument("--url", required=True, help="URL do artefato publicado")
 
     return parser
 
@@ -469,6 +477,27 @@ def comando_relatar(diretorio: str, *, cfg=None) -> int:
         encoding="utf-8",
     )
 
+    # A publicação do dashboard é feita pelo agente, com a ferramenta dele — o
+    # código não chama serviço de LLM. O que fica aqui é o registro: a execução
+    # declara que há uma página para publicar e guarda a URL quando ela existir,
+    # para que a pasta continue explicando a si mesma meses depois.
+    caminho_publicacao = execucao / "publicacao.json"
+    if not caminho_publicacao.is_file():
+        caminho_publicacao.write_text(
+            json.dumps(
+                {
+                    "run_id": manifesto["run_id"],
+                    "dashboard": dashboard.name,
+                    "estado": "pendente",
+                    "url": None,
+                    "publicado_em": None,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
     contagem = relatorio.resumo_por_resultado()
     print(f"\nPlanilha: {destino}")
     print(f"Séries: {len(resultado_series.series)} | Variações: {len(variacoes)} | "
@@ -489,6 +518,44 @@ def comando_relatar(diretorio: str, *, cfg=None) -> int:
         return 1
 
     print("\nAuditoria aprovada.")
+    print("Próximo passo: publicar o dashboard como artefato e registrar a URL com")
+    print(f"  registrar-artefato --run {execucao} --url <url do artefato>")
+    return 0
+
+
+# Destino conhecido da publicação. Guarda estreita de propósito: URL de outro
+# domínio no registro faria a execução apontar para uma página que ninguém
+# controla. Se o endereço mudar, muda-se aqui, de forma explícita.
+_DESTINO_ARTEFATO = "claude.ai"
+
+
+def comando_registrar_artefato(diretorio: str, url: str) -> int:
+    """Guarda na execução a URL do dashboard já publicado.
+
+    Determinístico e sem rede: quem publica é o agente, com a ferramenta de
+    artefatos. Este comando só amarra o link à execução que o gerou.
+    """
+    execucao = Path(diretorio)
+    caminho = execucao / "publicacao.json"
+    if not caminho.is_file():
+        print(f"ERRO: publicacao.json não encontrado em {execucao}")
+        print("Rode `relatar` antes: é ele que gera o dashboard a ser publicado.")
+        return 2
+
+    endereco = (url or "").strip()
+    if not endereco.startswith("https://") or _DESTINO_ARTEFATO not in endereco:
+        print(f"ERRO: {endereco!r} não é uma URL https de {_DESTINO_ARTEFATO}")
+        print("O registro não aceita endereço de outro destino.")
+        return 2
+
+    registro = json.loads(caminho.read_text(encoding="utf-8"))
+    registro["url"] = endereco
+    registro["estado"] = "publicado"
+    registro["publicado_em"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    caminho.write_text(
+        json.dumps(registro, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"Artefato registrado em {caminho}: {endereco}")
     return 0
 
 
@@ -500,6 +567,8 @@ def main(argv=None) -> int:
         return comando_validar_fatos(args.run)
     if args.comando == "relatar":
         return comando_relatar(args.run)
+    if args.comando == "registrar-artefato":
+        return comando_registrar_artefato(args.run, args.url)
     return 2
 
 

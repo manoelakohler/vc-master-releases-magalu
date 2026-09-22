@@ -509,3 +509,58 @@ class TestDashboardNoFluxo:
         assert "receita_liquida" in html
         for rotulo in ("1T26", "2T26"):
             assert rotulo in html
+
+
+class TestRegistroDaPublicacao:
+    """O dashboard é publicado pelo agente; a execução guarda o vínculo.
+
+    A publicação usa ferramenta do agente, não código Python — chamada a API
+    de LLM dentro do pipeline está fora de escopo. O que o código faz é
+    determinístico: declara o estado pendente e guarda a URL quando ela chega,
+    para que a pasta da execução continue explicando a si mesma.
+    """
+
+    def _publicacao(self, execucao):
+        return json.loads((execucao / "publicacao.json").read_text(encoding="utf-8"))
+
+    def test_relatar_declara_a_publicacao_pendente(self, execucao):
+        comando_relatar(str(execucao), cfg=carregar_config())
+        registro = self._publicacao(execucao)
+        assert registro["estado"] == "pendente"
+        assert registro["url"] is None
+        assert registro["dashboard"].endswith(".html")
+
+    def test_relatar_aponta_o_proximo_passo(self, execucao, capsys):
+        comando_relatar(str(execucao), cfg=carregar_config())
+        saida = capsys.readouterr().out
+        assert "registrar-artefato" in saida
+
+    def test_registro_preenche_url_e_data(self, execucao):
+        from magalu_releases.cli import comando_registrar_artefato
+
+        comando_relatar(str(execucao), cfg=carregar_config())
+        codigo = comando_registrar_artefato(
+            str(execucao), "https://claude.ai/public/artifacts/abc-123"
+        )
+        registro = self._publicacao(execucao)
+        assert codigo == 0
+        assert registro["estado"] == "publicado"
+        assert registro["url"] == "https://claude.ai/public/artifacts/abc-123"
+        assert registro["publicado_em"]
+
+    def test_url_fora_do_destino_conhecido_e_recusada(self, execucao, capsys):
+        from magalu_releases.cli import comando_registrar_artefato
+
+        comando_relatar(str(execucao), cfg=carregar_config())
+        codigo = comando_registrar_artefato(str(execucao), "https://exemplo.invalido/x")
+        assert codigo != 0
+        assert self._publicacao(execucao)["estado"] == "pendente"
+
+    def test_registro_sem_relatar_falha_alto(self, execucao, capsys):
+        from magalu_releases.cli import comando_registrar_artefato
+
+        codigo = comando_registrar_artefato(
+            str(execucao), "https://claude.ai/public/artifacts/abc-123"
+        )
+        assert codigo != 0
+        assert "publicacao.json" in capsys.readouterr().out

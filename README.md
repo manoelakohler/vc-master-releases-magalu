@@ -128,6 +128,17 @@ auditoria inteira — inclusive o que passou. Cada linha do comparativo abre a e
 sustenta: documento, página e trecho literal. Ausência aparece como `—`, nunca como zero, e a
 variação suprimida mostra o motivo.
 
+### Publicação
+
+O dashboard é publicado como artefato pelo agente — o código não chama serviço de LLM. Depois
+de `relatar`, publique o HTML e amarre o link à execução:
+
+```powershell
+.venv\Scripts\python.exe -m magalu_releases registrar-artefato --run runs\<run_id> --url <url>
+```
+
+O artefato nasce privado; torná-lo público é ação de quem tem a conta.
+
 ---
 
 ## Regras que o código impõe
@@ -151,7 +162,7 @@ variação suprimida mostra o motivo.
 .venv\Scripts\python.exe -m pytest
 ```
 
-**512 testes, nenhum toca a rede.** A concentração é deliberada em `numeros`, `periodos`,
+**520 testes, nenhum toca a rede.** A concentração é deliberada em `numeros`, `periodos`,
 `series` e `variacoes`: é onde um erro passa despercebido até chegar na planilha.
 `tests/test_integracao.py` exercita a Fase C ponta a ponta.
 
@@ -170,7 +181,7 @@ src/magalu_releases/
   ├── saida/       excel · dashboard · resumo · pendencias
   ├── auditoria/   checks
   └── cli.py
-tests/                        512 testes + fixtures sintéticas
+tests/                        520 testes + fixtures sintéticas
 runs/                         artefatos por execução (não versionado)
 .claude/skills/magalu-release-analysis/   o procedimento de análise
 CLAUDE.md                     regras permanentes do repositório

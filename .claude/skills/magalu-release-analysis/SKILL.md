@@ -293,6 +293,28 @@ O arquivo é autocontido: sem CDN, sem fonte remota, sem script externo. Um rela
 depende de rede para renderizar deixa de ser auditável exatamente quando alguém o abre meses
 depois.
 
+## Publicação
+
+O dashboard é publicado como **artefato**, e quem publica é o agente — com a ferramenta de
+artefatos, nunca o código. Chamada a serviço de LLM dentro do Python está fora de escopo, e
+manter a publicação fora do pipeline é o que permite que a Fase C continue determinística e
+testável sem rede.
+
+O procedimento, depois de `relatar` aprovar a auditoria:
+
+1. Publique o arquivo `dashboard_<run_id>.html` da execução como artefato.
+2. Registre a URL na execução:
+   `registrar-artefato --run <diretório> --url <url do artefato>`.
+3. Informe que o artefato nasce **privado** — tornar público é ação de quem tem a conta, em
+   claude.ai. Não declare como público o que não foi tornado público.
+
+O registro existe porque o link precisa sobreviver à conversa: sem ele, a pasta da execução
+deixa de explicar onde a página foi parar.
+
+**A página publicada leva linha de autoria.** Uma página pública com o nome da companhia e
+números dela pode ser lida como publicação oficial; a declaração de análise independente, com
+a fonte citada, é o que impede essa leitura.
+
 ## Limites
 
 - Somente PDFs textuais. **Sem OCR** — PDF digitalizado vira pendência.

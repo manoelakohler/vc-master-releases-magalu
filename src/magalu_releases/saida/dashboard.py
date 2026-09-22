@@ -488,6 +488,9 @@ def _pagina(conteudo: _Conteudo, *, run_id: str, fonte: str) -> str:
   <p class="sub">{_e(fonte)}</p>
   <p class="mudo">Execução {_e(run_id)} · página gerada em
      {datetime.now().strftime("%d/%m/%Y %H:%M")} a partir da planilha desta execução</p>
+  <p class="nota"><strong>Análise independente</strong>, elaborada a partir dos releases
+     públicos de resultados divulgados pela companhia. Esta página não é publicação da
+     Magazine Luiza nem tem vínculo com a empresa.</p>
   <p class="nota">Conteúdo descritivo, comparativo e rastreável, limitado ao que os
      documentos reportam. Não constitui aconselhamento de investimento.</p>
   <nav>

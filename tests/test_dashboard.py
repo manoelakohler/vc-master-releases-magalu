@@ -102,9 +102,13 @@ def planilha(tmp_path, fato_valido, documento_valido):
 
 
 def texto_visivel(html: str) -> str:
-    """Tira marcação e estilo, deixando o que a pessoa lê."""
+    """Tira marcação e estilo, deixando o que a pessoa lê.
+
+    Colapsa espaço em branco porque a quebra de linha do HTML não existe para
+    quem lê a página: "releases\n públicos" é uma frase só na tela.
+    """
     sem_script = re.sub(r"<(script|style)\b.*?</\1>", " ", html, flags=re.S | re.I)
-    return re.sub(r"<[^>]+>", " ", sem_script)
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", sem_script))
 
 
 @pytest.fixture
@@ -243,3 +247,23 @@ class TestValidacao:
             tmp_path / "nao-existe.html", n_periodos=3, series_ids=[], rotulos=()
         )
         assert checks[0].resultado is ResultadoCheck.FAIL
+
+
+class TestAutoria:
+    """Página pública com o nome da companhia precisa dizer quem a fez.
+
+    Sem isso, um leitor que chega pelo link pode entender o dashboard como
+    publicação da própria Magazine Luiza — o que ele não é, e o que nenhuma
+    quantidade de rodapé conserta depois.
+    """
+
+    def test_declara_analise_independente(self, html):
+        visivel = texto_visivel(html)
+        assert "independente" in visivel.lower()
+
+    def test_cita_a_fonte_oficial(self, html):
+        assert "Central de Resultados" in texto_visivel(html)
+
+    def test_nao_se_apresenta_como_publicacao_da_companhia(self, html):
+        visivel = texto_visivel(html).lower()
+        assert "releases públicos" in visivel or "releases publicos" in visivel
