@@ -279,6 +279,20 @@ a skill de planilhas ensina **como** manipular o formato, e o código Python do 
 Regra que atravessa todas as abas: **nenhum número aparece na planilha sem que seja possível
 chegar, a partir dele, até uma linha da aba Evidências** com documento, página e trecho.
 
+## Dashboard
+
+A execução também entrega um **dashboard HTML de página única**, gerado a partir da planilha
+já gravada — nunca de dados em memória. Ler o artefato é o que garante que a página não possa
+afirmar nada que o arquivo entregue não contenha.
+
+Vale nele a mesma regra da planilha: **todo número exibido abre a sua evidência** — documento,
+página e trecho literal. Ausência aparece como ausência, variação suprimida mostra o motivo, e
+a auditoria aparece inteira, inclusive o que passou.
+
+O arquivo é autocontido: sem CDN, sem fonte remota, sem script externo. Um relatório que
+depende de rede para renderizar deixa de ser auditável exatamente quando alguém o abre meses
+depois.
+
 ## Limites
 
 - Somente PDFs textuais. **Sem OCR** — PDF digitalizado vira pendência.

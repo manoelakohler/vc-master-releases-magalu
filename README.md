@@ -37,7 +37,7 @@ Python não faz chamadas a APIs de LLM. Disso decorre a arquitetura inteira.
                                         │
                                         ▼
          FASE C (Python)      valida contrato · séries · variações
-                              Excel (6 abas) · auditoria (32 verificações)
+                              Excel (6 abas) · dashboard HTML · auditoria (33 verificações)
 ```
 
 O que a máquina fez é reproduzível byte a byte. O que exigiu leitura fica isolado num único
@@ -90,7 +90,8 @@ Lista **todas** as violações de contrato de uma vez. Só passa quando o arquiv
 .venv\Scripts\python.exe -m magalu_releases relatar --run runs\<run_id>
 ```
 
-Gera `analise_<run_id>.xlsx`, `resumo.md` e `auditoria.json`. Sai com código diferente de zero quando a auditoria encontra falha de severidade alta — a execução
+Gera `analise_<run_id>.xlsx`, `dashboard_<run_id>.html`, `resumo.md` e `auditoria.json`. Sai
+com código diferente de zero quando a auditoria encontra falha de severidade alta — a execução
 não pode ser apresentada como concluída nesse caso.
 
 ---
@@ -110,6 +111,22 @@ De qualquer número exibido é possível chegar a uma linha de **Evidências**.
 
 A planilha **não tem fórmulas vivas**: é registro auditável, não modelo recalculável. Uma
 fórmula que recalcula pode divergir do que foi extraído e auditado.
+
+---
+
+## O dashboard
+
+`dashboard_<run_id>.html` — **uma página, um arquivo, nada externo**. Sem CDN, sem fonte
+remota, sem script de terceiro: abre offline, hoje e daqui a um ano.
+
+É gerado **a partir da planilha já gravada**, não dos objetos em memória. A página só pode
+mostrar o que está no arquivo entregue, e qualquer execução antiga pode ser re-renderizada a
+partir do próprio artefato.
+
+Traz escopo, comparativo por série com mini-gráficos, documentos com SHA-256, pendências e a
+auditoria inteira — inclusive o que passou. Cada linha do comparativo abre a evidência que a
+sustenta: documento, página e trecho literal. Ausência aparece como `—`, nunca como zero, e a
+variação suprimida mostra o motivo.
 
 ---
 
@@ -134,7 +151,7 @@ fórmula que recalcula pode divergir do que foi extraído e auditado.
 .venv\Scripts\python.exe -m pytest
 ```
 
-**486 testes, nenhum toca a rede.** A concentração é deliberada em `numeros`, `periodos`,
+**512 testes, nenhum toca a rede.** A concentração é deliberada em `numeros`, `periodos`,
 `series` e `variacoes`: é onde um erro passa despercebido até chegar na planilha.
 `tests/test_integracao.py` exercita a Fase C ponta a ponta.
 
@@ -150,10 +167,10 @@ src/magalu_releases/
   ├── extracao/    texto · dossie
   ├── fatos/       esquema (o portão)
   ├── analise/     series · variacoes
-  ├── saida/       excel · resumo · pendencias
+  ├── saida/       excel · dashboard · resumo · pendencias
   ├── auditoria/   checks
   └── cli.py
-tests/                        486 testes + fixtures sintéticas
+tests/                        512 testes + fixtures sintéticas
 runs/                         artefatos por execução (não versionado)
 .claude/skills/magalu-release-analysis/   o procedimento de análise
 CLAUDE.md                     regras permanentes do repositório

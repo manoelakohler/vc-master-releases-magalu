@@ -468,3 +468,44 @@ class TestReguaDePeriodosUnica:
     def test_regua_integra_continua_passando(self, execucao):
         assert comando_relatar(str(execucao), cfg=carregar_config()) == 0
 
+
+class TestDashboardNoFluxo:
+    """O dashboard é parte da entrega, não um extra manual.
+
+    Gerado ao final de `relatar`, a partir da planilha recém-gravada, e auditado
+    como qualquer outro artefato: um relatório que sai incompleto sem ninguém
+    perceber é pior que não existir.
+    """
+
+    def test_relatar_gera_o_dashboard(self, execucao):
+        comando_relatar(str(execucao), cfg=carregar_config())
+        assert list(execucao.glob("dashboard_*.html"))
+
+    def test_dashboard_entra_na_auditoria(self, execucao):
+        comando_relatar(str(execucao), cfg=carregar_config())
+        verificacoes = {
+            v["check_id"]: v
+            for v in json.loads((execucao / "auditoria.json").read_text(encoding="utf-8"))
+        }
+        assert verificacoes["dsh_completo"]["resultado"] == "PASS"
+
+    def test_check_do_dashboard_aparece_na_planilha(self, execucao):
+        comando_relatar(str(execucao), cfg=carregar_config())
+        planilha = list(execucao.glob("analise_*.xlsx"))[0]
+        aba = load_workbook(planilha)["Auditoria"]
+        ids = {aba.cell(row=linha, column=1).value for linha in range(2, aba.max_row + 1)}
+        assert "dsh_completo" in ids
+
+    def test_dashboard_reflete_a_planilha_final(self, execucao):
+        """A página precisa mostrar a auditoria completa, inclusive os checks do arquivo."""
+        comando_relatar(str(execucao), cfg=carregar_config())
+        html = list(execucao.glob("dashboard_*.html"))[0].read_text(encoding="utf-8")
+        for check in ("xls_abas", "xls_reabertura", "dsh_completo"):
+            assert check in html
+
+    def test_dashboard_traz_as_series_e_os_periodos(self, execucao):
+        comando_relatar(str(execucao), cfg=carregar_config())
+        html = list(execucao.glob("dashboard_*.html"))[0].read_text(encoding="utf-8")
+        assert "receita_liquida" in html
+        for rotulo in ("1T26", "2T26"):
+            assert rotulo in html

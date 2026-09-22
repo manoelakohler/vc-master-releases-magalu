@@ -148,6 +148,7 @@ Cada verificação vira uma linha na aba Auditoria, inclusive as que passaram.
 | `xls_colunas_periodo` | Comparativo tem `N` colunas de período em ordem crescente |
 | `xls_texto_preservado` | `valor_original` e `trecho_fonte` gravados como texto |
 | `xls_reabertura` | arquivo reabre e as verificações acima passam sobre o conteúdo lido |
+| `dsh_completo` | o dashboard HTML traz os `N` períodos, todas as séries e a seção de pendências |
 
 ### Severidade e desfecho
 

@@ -38,6 +38,7 @@ from magalu_releases.fonte.download import baixar_documento, validar_pdf_textual
 from magalu_releases.fonte.http import ClienteHttp, FalhaHttp
 from magalu_releases.fonte.selecao import selecionar_releases
 from magalu_releases.models import Documento, Pendencia
+from magalu_releases.saida.dashboard import gerar_dashboard, validar_dashboard
 from magalu_releases.saida.excel import gerar_excel, validar_planilha
 from magalu_releases.saida.pendencias import (
     PendenciaInvalida,
@@ -420,19 +421,44 @@ def comando_relatar(diretorio: str, *, cfg=None) -> int:
             auditoria=verificacoes, fonte=cfg.fonte.nome, run_id=manifesto["run_id"],
         )
 
-    # Duas passadas, porque a validação da planilha é ela própria auditoria e
-    # precisa aparecer na aba: a primeira grava o arquivo, a releitura vira
-    # verificação, a segunda grava o arquivo já com essas linhas dentro.
+    dashboard = execucao / f"dashboard_{manifesto['run_id']}.html"
+
+    def renderizar():
+        """O dashboard lê a planilha gravada — nunca os objetos em memória."""
+        gerar_dashboard(
+            caminho_xlsx=destino, destino=dashboard,
+            run_id=manifesto["run_id"], fonte=cfg.fonte.nome,
+        )
+
+    # Duas passadas, porque a validação dos artefatos é ela própria auditoria e
+    # precisa aparecer na aba: a primeira grava planilha e página, a releitura
+    # das duas vira verificação, a segunda grava tudo já com essas linhas dentro.
     escrever(relatorio.verificacoes)
+    renderizar()
     verificacoes_planilha = validar_planilha(
         destino, n_periodos=len(periodos), periodos=periodos
     )
-    relatorio = RelatorioAuditoria(relatorio.verificacoes + verificacoes_planilha)
+    verificacoes_dashboard = validar_dashboard(
+        dashboard,
+        n_periodos=len(periodos),
+        series_ids=[s.serie_id for s in resultado_series.series],
+        rotulos=tuple(rotulos.values()),
+    )
+    relatorio = RelatorioAuditoria(
+        relatorio.verificacoes + verificacoes_planilha + verificacoes_dashboard
+    )
     escrever(relatorio.verificacoes)
+    renderizar()
 
     # Conferência final sobre o arquivo entregue. Não realimenta o relatório —
     # senão cada passada acrescentaria linhas e nunca se chegaria ao fim.
     confirmacao = validar_planilha(destino, n_periodos=len(periodos), periodos=periodos)
+    confirmacao += validar_dashboard(
+        dashboard,
+        n_periodos=len(periodos),
+        series_ids=[s.serie_id for s in resultado_series.series],
+        rotulos=tuple(rotulos.values()),
+    )
     falhas_confirmacao = [
         c for c in confirmacao if c.resultado is not ResultadoCheck.PASS
     ]
