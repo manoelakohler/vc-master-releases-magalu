@@ -1,0 +1,26 @@
+# Fim de linha é decidido aqui, não pela configuração de cada máquina.
+#
+# O repositório guarda LF, que é o correto. O que varia é a árvore de trabalho:
+# esta máquina tem core.autocrlf=true e converteria para CRLF ao trocar de
+# branch ou clonar, enquanto outra com autocrlf=false não converteria. O mesmo
+# arquivo passaria a ter bytes diferentes conforme quem o baixou, e o primeiro
+# commit feito de lá viria com diff de arquivo inteiro sem mudar uma linha de
+# código — ruído que esconde a alteração real na revisão.
+#
+# `eol=lf` fixa LF nos dois lados, independentemente de core.autocrlf.
+
+* text=auto eol=lf
+
+# Formatos que o Git nunca deve tratar como texto. Normalizar um PDF ou uma
+# planilha corrompe o arquivo.
+*.pdf   binary
+*.xlsx  binary
+*.xlsm  binary
+*.png   binary
+*.jpg   binary
+*.ico   binary
+
+# Arquivos de linha de comando do Windows precisam de CRLF para rodar.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
