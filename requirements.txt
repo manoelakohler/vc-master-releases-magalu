@@ -1,0 +1,19 @@
+# Dependências realmente utilizadas pelo código (CLAUDE.md: não é dump do ambiente).
+# Verificado por varredura de imports em src/ e tests/.
+# pandas e numpy estão no .venv mas NÃO são usados pelo projeto.
+
+# Rede — única fronteira HTTP (src/magalu_releases/fonte/http.py)
+requests==2.34.2
+
+# Parsing da Central de Resultados (src/magalu_releases/fonte/descoberta.py)
+beautifulsoup4==4.15.0
+lxml==6.1.3  # parser usado pelo BeautifulSoup em tempo de execução
+
+# Extração de texto por página + detecção de estrutura de tabela
+pdfplumber==0.11.10
+
+# Planilha — artefato final (src/magalu_releases/saida/excel.py)
+openpyxl==3.1.5
+
+# Testes
+pytest==9.1.1

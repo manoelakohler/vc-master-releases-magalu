@@ -1,0 +1,47 @@
+# Ponto ÚNICO de configuração do projeto.
+# Nenhum valor daqui pode ser duplicado dentro do código (regra do CLAUDE.md).
+
+[execucao]
+# N padrão quando o usuário não informa. É só um padrão — N sempre vem da chamada.
+n_padrao = 3
+diretorio_execucoes = "runs"
+
+[fonte]
+# Central de Resultados oficial da Magazine Luiza.
+# Mantida aqui, e não na skill, porque sites de RI mudam de estrutura.
+nome = "Magazine Luiza — Central de Resultados"
+base_url = "https://ri.magazineluiza.com.br/"
+url_central = "https://ri.magazineluiza.com.br/ListResultados/Central-de-Resultados"
+dominio_oficial = "ri.magazineluiza.com.br"
+
+[http]
+# O edge (WAF Azion) rejeita clientes sem conjunto completo de cabeçalhos de navegador
+# e aplica rate limiting por IP. Estes valores foram determinados empiricamente no
+# spike da etapa 1 — reduzir o intervalo reintroduz o bloqueio.
+timeout_segundos = 45
+intervalo_entre_requisicoes = 3.0
+tentativas_maximas = 4
+backoff_base_segundos = 5.0
+backoff_fator = 2.0
+status_para_retentar = [403, 429, 500, 502, 503, 504]
+
+[http.cabecalhos]
+"User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+"Accept" = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+"Accept-Language" = "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
+"Accept-Encoding" = "gzip, deflate"
+"Upgrade-Insecure-Requests" = "1"
+"Sec-Fetch-Dest" = "document"
+"Sec-Fetch-Mode" = "navigate"
+"Sec-Fetch-Site" = "none"
+"Sec-Fetch-User" = "?1"
+"sec-ch-ua" = "\"Chromium\";v=\"125\", \"Not.A/Brand\";v=\"24\""
+"sec-ch-ua-mobile" = "?0"
+"sec-ch-ua-platform" = "\"Windows\""
+"DNT" = "1"
+
+[pdf]
+# Abaixo deste volume de texto por página, o PDF é tratado como não textual.
+# Sem OCR: PDF digitalizado vira pendência (regra da skill).
+minimo_caracteres_por_pagina = 50
+minimo_paginas_textuais_proporcao = 0.5

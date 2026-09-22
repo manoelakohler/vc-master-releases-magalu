@@ -1,0 +1,32 @@
+# Ambiente virtual — nunca versionar
+.venv/
+
+# Artefatos de execução — reproduzíveis a partir do código
+runs/
+*.xlsx
+*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Testes e ferramentas
+.pytest_cache/
+.pytest_tmp/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Sistema operacional / editores
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+.vscode/
+
+# Exceção: fixtures de teste são versionadas mesmo sendo pdf/xlsx
+!tests/fixtures/**/*.pdf
+!tests/fixtures/**/*.xlsx

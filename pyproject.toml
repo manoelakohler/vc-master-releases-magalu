@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "magalu-releases"
+version = "0.1.0"
+description = "Análise de releases de resultados da Magazine Luiza com evidência rastreável"
+requires-python = ">=3.12"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --basetemp=.pytest_tmp -m 'not rede'"
+markers = [
+    "rede: teste que depende de acesso real à internet (desativado por padrão)",
+]
