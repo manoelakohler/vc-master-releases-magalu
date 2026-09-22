@@ -24,6 +24,11 @@ class RespostaFalsa:
         self.url_final = "https://exemplo/doc.pdf"
         self.conteudo = conteudo
         self.content_type = content_type
+        self.cabecalhos = {}
+
+    @property
+    def nome_arquivo(self):
+        return None
 
 
 class ClienteFalso:
@@ -102,3 +107,38 @@ class TestTextualidade:
         resultado = validar_pdf_textual([], minimo_caracteres=50, proporcao_minima=0.5)
         assert resultado.textual is False
         assert resultado.motivo
+
+
+class TestNomeDadoPeloServidor:
+    """O download já traz a declaração do servidor sobre o arquivo.
+
+    Como o link da Central é opaco, esse nome é a única evidência independente
+    de que o PDF baixado é o release daquele período — e ela vem sem nenhuma
+    requisição extra, no cabeçalho do próprio download.
+    """
+
+    class RespostaComNome(RespostaFalsa):
+        def __init__(self, conteudo, nome):
+            super().__init__(conteudo)
+            self.cabecalhos = {"Content-Disposition": f'inline; filename="{nome}"'}
+
+        @property
+        def nome_arquivo(self):
+            return self.cabecalhos["Content-Disposition"].split('"')[1]
+
+    def test_preserva_o_nome_do_servidor(self, tmp_path, documento_valido):
+        cliente = ClienteFalso(self.RespostaComNome(PDF_MINIMO, "MGLU_ER_1T26_POR.pdf"))
+        baixado = baixar_documento(cliente, documento_valido(), tmp_path)
+        assert baixado.nome_servidor == "MGLU_ER_1T26_POR.pdf"
+
+    def test_sem_nome_o_campo_fica_nulo(self, tmp_path, documento_valido):
+        cliente = ClienteFalso(RespostaFalsa(PDF_MINIMO))
+        baixado = baixar_documento(cliente, documento_valido(), tmp_path)
+        assert baixado.nome_servidor is None
+
+    def test_o_arquivo_local_continua_nomeado_pelo_documento_id(self, tmp_path, documento_valido):
+        """O nome do servidor é evidência, não caminho: nada de gravar caminho vindo de fora."""
+        cliente = ClienteFalso(self.RespostaComNome(PDF_MINIMO, "../../etc/passwd.pdf"))
+        baixado = baixar_documento(cliente, documento_valido(documento_id="doc-2t25"), tmp_path)
+        assert baixado.arquivo_local == "doc-2t25.pdf"
+        assert (tmp_path / "doc-2t25.pdf").is_file()

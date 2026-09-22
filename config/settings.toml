@@ -9,9 +9,12 @@ diretorio_execucoes = "runs"
 [fonte]
 # Central de Resultados oficial da Magazine Luiza.
 # Mantida aqui, e não na skill, porque sites de RI mudam de estrutura.
+# A URL da Central NÃO é configurada: o site a serve com um token de canal
+# (`?=<token>`) e, sem ele, responde HTTP 500. Ela é descoberta na home a cada
+# execução. Congelar a URL aqui foi o que transformou a fonte oficial em erro
+# silencioso quando o site mudou de estrutura.
 nome = "Magazine Luiza — Central de Resultados"
 base_url = "https://ri.magazineluiza.com.br/"
-url_central = "https://ri.magazineluiza.com.br/ListResultados/Central-de-Resultados"
 dominio_oficial = "ri.magazineluiza.com.br"
 
 [http]

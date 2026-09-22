@@ -28,7 +28,6 @@ class ConfigExecucao:
 class ConfigFonte:
     nome: str
     base_url: str
-    url_central: str
     dominio_oficial: str
 
 
@@ -86,7 +85,6 @@ def carregar_config(caminho: Path | str | None = None) -> Config:
         fonte = ConfigFonte(
             nome=str(dados["fonte"]["nome"]),
             base_url=str(dados["fonte"]["base_url"]),
-            url_central=str(dados["fonte"]["url_central"]),
             dominio_oficial=str(dados["fonte"]["dominio_oficial"]),
         )
         bloco_http = dados["http"]

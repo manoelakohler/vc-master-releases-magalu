@@ -17,25 +17,35 @@ import argparse
 import json
 import sys
 from dataclasses import asdict
+from dataclasses import replace as replace_documento
 from pathlib import Path
 
 from magalu_releases.analise.series import construir_series
 from magalu_releases.analise.variacoes import calcular_variacoes
-from magalu_releases.auditoria.checks import auditar
+from magalu_releases.auditoria.checks import RelatorioAuditoria, auditar
 from magalu_releases.config import carregar_config
 from magalu_releases.extracao.dossie import montar_dossie, nome_execucao
 from magalu_releases.extracao.texto import PdfIlegivel, extrair_paginas
 from magalu_releases.fatos.esquema import FatosInvalidos, carregar_fatos
-from magalu_releases.fonte.classificacao import classificar_documento  # noqa: F401
-from magalu_releases.fonte.descoberta import descobrir_documentos, tem_paginacao
+from magalu_releases.fonte.classificacao import confirmar_release
+from magalu_releases.fonte.descoberta import (
+    CentralNaoEncontrada,
+    descobrir_documentos,
+    encontrar_url_central,
+    tem_paginacao,
+)
 from magalu_releases.fonte.download import baixar_documento, validar_pdf_textual
 from magalu_releases.fonte.http import ClienteHttp, FalhaHttp
 from magalu_releases.fonte.selecao import selecionar_releases
-from magalu_releases.models import Documento
+from magalu_releases.models import Documento, Pendencia
 from magalu_releases.saida.excel import gerar_excel, validar_planilha
-from magalu_releases.saida.pendencias import consolidar_pendencias
+from magalu_releases.saida.pendencias import (
+    PendenciaInvalida,
+    consolidar_pendencias,
+    pendencia_de_dict,
+)
 from magalu_releases.saida.resumo import montar_esqueleto, validar_resumo
-from magalu_releases.vocabularios import ResultadoCheck
+from magalu_releases.vocabularios import Gatilho, ResultadoCheck, Severidade
 
 
 def _n_positivo(texto: str) -> int:
@@ -80,9 +90,31 @@ def comando_coletar(n: int, *, cfg=None, cliente=None, raiz=None) -> int:
     cliente = cliente or ClienteHttp(cfg.http)
     raiz = Path(raiz) if raiz else Path(cfg.execucao.diretorio_execucoes)
 
-    print(f"Fonte: {cfg.fonte.url_central}")
+    print(f"Fonte: {cfg.fonte.base_url}")
+    # A Central é alcançada pela home: sua URL carrega um token de canal e, sem
+    # ele, o site responde 500. Descobrir a cada execução é o que impede que uma
+    # URL congelada vire fonte oficial inexistente.
     try:
-        pagina = cliente.obter(cfg.fonte.url_central, referer=cfg.fonte.base_url)
+        home = cliente.obter(cfg.fonte.base_url)
+        url_central = encontrar_url_central(
+            home.conteudo.decode("utf-8", "replace"), base_url=cfg.fonte.base_url
+        )
+    except FalhaHttp as erro:
+        print(f"ERRO ao acessar {cfg.fonte.base_url}: {erro}")
+        print("A coleta não continua com fonte não oficial nem com dado de outra origem.")
+        return 2
+    except CentralNaoEncontrada as erro:
+        print(f"ERRO: {erro}")
+        return 2
+
+    if cfg.fonte.dominio_oficial not in url_central:
+        print(f"ERRO: a Central apontada ({url_central}) está fora do domínio oficial "
+              f"{cfg.fonte.dominio_oficial}")
+        return 2
+
+    print(f"Central de Resultados: {url_central}")
+    try:
+        pagina = cliente.obter(url_central, referer=cfg.fonte.base_url)
     except FalhaHttp as erro:
         print(f"ERRO ao acessar a Central de Resultados: {erro}")
         print("A coleta não continua com fonte não oficial nem com dado de outra origem.")
@@ -119,13 +151,55 @@ def comando_coletar(n: int, *, cfg=None, cliente=None, raiz=None) -> int:
     paginas_por_documento = {}
     pendencias = list(selecao.pendencias)
 
+    def pendencia_de_coleta(documento, descricao, acao):
+        """Um período perdido na coleta é pendência, não aviso de terminal.
+
+        Sem isto a execução segue com um release a menos e nada na entrega diz
+        por quê — o terminal já rolou para longe quando alguém abre a planilha.
+        """
+        return Pendencia(
+            pendencia_id=f"pen-c{len(pendencias) + 1:04d}",
+            tipo=Gatilho.AMBIGUIDADE,
+            severidade=Severidade.ALTA,
+            descricao=descricao,
+            referencias=(documento.documento_id,),
+            acao_sugerida=acao,
+        )
+
     for documento in selecao.selecionados:
-        print(f"  baixando {documento.documento_id} ({documento.periodo.rotulo})...")
+        rotulo = documento.periodo.rotulo
+        print(f"  baixando {documento.documento_id} ({rotulo})...")
         try:
             baixado = baixar_documento(cliente, documento, execucao / "pdfs")
         except Exception as erro:
             print(f"    FALHA: {erro}")
+            pendencias.append(
+                pendencia_de_coleta(
+                    documento,
+                    f"Release de {rotulo} não pôde ser baixado da fonte oficial: {erro}",
+                    "Repetir a coleta deste período ou baixar o PDF manualmente da Central",
+                )
+            )
             continue
+
+        # O servidor nomeia o arquivo no download. É a única confirmação
+        # independente de que o token opaco da Central aponta mesmo para o
+        # release daquele período — e não custa requisição nenhuma.
+        confirmado, divergencia = confirmar_release(baixado.nome_servidor, rotulo)
+        if not confirmado:
+            print(f"    NÃO CONFIRMADO: {divergencia}")
+            baixados.append(replace_documento(baixado, motivo_descarte=divergencia))
+            pendencias.append(
+                pendencia_de_coleta(
+                    documento,
+                    f"Release de {rotulo}: {divergencia}. O arquivo não foi analisado",
+                    "Conferir na Central qual arquivo é o release deste período",
+                )
+            )
+            continue
+
+        if baixado.nome_servidor:
+            baixado = replace_documento(baixado, titulo=baixado.nome_servidor)
 
         try:
             paginas = extrair_paginas(
@@ -133,6 +207,13 @@ def comando_coletar(n: int, *, cfg=None, cliente=None, raiz=None) -> int:
             )
         except PdfIlegivel as erro:
             print(f"    PDF ilegível: {erro}")
+            pendencias.append(
+                pendencia_de_coleta(
+                    documento,
+                    f"Release de {rotulo} foi baixado mas não pôde ser lido como PDF: {erro}",
+                    "Conferir o arquivo baixado e repetir a coleta deste período",
+                )
+            )
             continue
 
         textual = validar_pdf_textual(
@@ -140,12 +221,17 @@ def comando_coletar(n: int, *, cfg=None, cliente=None, raiz=None) -> int:
             minimo_caracteres=cfg.pdf.minimo_caracteres_por_pagina,
             proporcao_minima=cfg.pdf.minimo_paginas_textuais_proporcao,
         )
-        from dataclasses import replace
-
-        baixado = replace(baixado, paginas=len(paginas), textual=textual.textual)
+        baixado = replace_documento(baixado, paginas=len(paginas), textual=textual.textual)
         if not textual.textual:
             print(f"    NÃO TEXTUAL: {textual.motivo} — sem OCR, vira pendência")
-            baixados.append(replace(baixado, motivo_descarte=textual.motivo))
+            baixados.append(replace_documento(baixado, motivo_descarte=textual.motivo))
+            pendencias.append(
+                pendencia_de_coleta(
+                    documento,
+                    f"Release de {rotulo} não é textual: {textual.motivo}",
+                    "Obter uma versão textual do release ou extrair os valores manualmente",
+                )
+            )
             continue
 
         baixados.append(baixado)
@@ -174,8 +260,11 @@ def comando_coletar(n: int, *, cfg=None, cliente=None, raiz=None) -> int:
                 "n_pedido": selecao.n_pedido,
                 "n_obtido": selecao.n_obtido,
                 "periodos": list(selecao.periodos),
-                "fonte": cfg.fonte.url_central,
+                "fonte": url_central,
                 "pendencias": [asdict(p) for p in consolidar_pendencias(pendencias)],
+                # Descartado sem registro é documento que sumiu: a auditoria da
+                # Fase C cobra o motivo de cada um.
+                "descartados": [asdict(d) for d in selecao.descartados],
             },
             default=_serializar,
             ensure_ascii=False,
@@ -217,6 +306,30 @@ def comando_validar_fatos(diretorio: str) -> int:
     return 0
 
 
+def _documento_de_dict(bruto: dict) -> Documento:
+    """Reconstrói um documento gravado pela Fase A, analisado ou descartado."""
+    from magalu_releases.periodos import interpretar_periodo
+    from magalu_releases.vocabularios import TipoDocumento
+
+    return Documento(
+        documento_id=bruto["documento_id"],
+        titulo=bruto["titulo"],
+        tipo=TipoDocumento(bruto["tipo"]),
+        periodo=(
+            interpretar_periodo(bruto["periodo"]["rotulo"]) if bruto.get("periodo") else None
+        ),
+        url_origem=bruto["url_origem"],
+        data_publicacao=bruto.get("data_publicacao"),
+        arquivo_local=bruto.get("arquivo_local"),
+        bytes=bruto.get("bytes"),
+        sha256=bruto.get("sha256"),
+        paginas=bruto.get("paginas"),
+        textual=bruto.get("textual"),
+        baixado_em=bruto.get("baixado_em"),
+        motivo_descarte=bruto.get("motivo_descarte"),
+    )
+
+
 def comando_relatar(diretorio: str, *, cfg=None) -> int:
     cfg = cfg or carregar_config()
     execucao = Path(diretorio)
@@ -233,35 +346,41 @@ def comando_relatar(diretorio: str, *, cfg=None) -> int:
         print(f"ERRO no portão semântico: {erro}")
         return 2
 
-    from magalu_releases.periodos import interpretar_periodo
-    from magalu_releases.vocabularios import TipoDocumento
-
     documentos_brutos = json.loads((execucao / "documentos.json").read_text(encoding="utf-8"))
-    documentos = [
-        Documento(
-            documento_id=d["documento_id"],
-            titulo=d["titulo"],
-            tipo=TipoDocumento(d["tipo"]),
-            periodo=interpretar_periodo(d["periodo"]["rotulo"]) if d.get("periodo") else None,
-            url_origem=d["url_origem"],
-            data_publicacao=d.get("data_publicacao"),
-            arquivo_local=d.get("arquivo_local"),
-            bytes=d.get("bytes"),
-            sha256=d.get("sha256"),
-            paginas=d.get("paginas"),
-            textual=d.get("textual"),
-            baixado_em=d.get("baixado_em"),
-            motivo_descarte=d.get("motivo_descarte"),
-        )
-        for d in documentos_brutos
-    ]
+    documentos = [_documento_de_dict(d) for d in documentos_brutos]
+    descartados = [_documento_de_dict(d) for d in manifesto.get("descartados", [])]
 
     periodos = tuple(manifesto["periodos"])
+    repetidos = sorted({c for c in periodos if periodos.count(c) > 1})
+    if repetidos:
+        # O manifesto é escrito por máquina: repetição aqui é coleta antiga ou
+        # corrompida. Deduplicar em silêncio consertaria a régua por baixo de
+        # uma análise que já foi escrita contra o dossiê torto.
+        print(f"ERRO: manifesto.json repete período(s) {', '.join(repetidos)} em {execucao}")
+        print("A régua da comparação precisa ter um período por posição. Refaça a coleta.")
+        return 2
+
     resultado_series = construir_series(carga.fatos, periodos)
     variacoes = [v for s in resultado_series.series for v in calcular_variacoes(s)]
 
+    # As pendências da coleta vêm do manifesto. A chave é exigida, não assumida
+    # vazia: um default silencioso aqui apagaria da entrega tudo que a Fase A
+    # encontrou — documento não classificado, período duplicado, lacuna.
+    if "pendencias" not in manifesto:
+        print(f"ERRO: manifesto.json sem a chave 'pendencias' em {execucao}")
+        print("A execução não pode ser relatada sem as pendências da coleta.")
+        return 2
+
+    try:
+        pendencias_da_coleta = [
+            pendencia_de_dict(bruto) for bruto in manifesto["pendencias"]
+        ]
+    except PendenciaInvalida as erro:
+        print(f"ERRO ao reler as pendências da coleta: {erro}")
+        return 2
+
     pendencias = consolidar_pendencias(
-        manifesto.get("pendencias_reconstituidas", []), resultado_series.pendencias
+        pendencias_da_coleta, resultado_series.pendencias
     )
 
     rotulos = {
@@ -288,20 +407,35 @@ def comando_relatar(diretorio: str, *, cfg=None) -> int:
     relatorio = auditar(
         n_pedido=manifesto["n_pedido"], documentos=documentos, fatos=carga.fatos,
         series=resultado_series.series, variacoes=variacoes, pendencias=pendencias,
-        resumo_texto=resumo_texto, periodos=periodos,
+        resumo_texto=resumo_texto, periodos=periodos, descartados=descartados,
     )
 
     destino = execucao / f"analise_{manifesto['run_id']}.xlsx"
-    gerar_excel(
-        caminho=destino, n_pedido=manifesto["n_pedido"], periodos=periodos,
-        documentos=documentos, fatos=carga.fatos, series=resultado_series.series,
-        variacoes=variacoes, pendencias=pendencias, resumo_texto=resumo_texto,
-        auditoria=relatorio.verificacoes, fonte=cfg.fonte.nome, run_id=manifesto["run_id"],
-    )
 
-    problemas_planilha = validar_planilha(
+    def escrever(verificacoes):
+        gerar_excel(
+            caminho=destino, n_pedido=manifesto["n_pedido"], periodos=periodos,
+            documentos=documentos, fatos=carga.fatos, series=resultado_series.series,
+            variacoes=variacoes, pendencias=pendencias, resumo_texto=resumo_texto,
+            auditoria=verificacoes, fonte=cfg.fonte.nome, run_id=manifesto["run_id"],
+        )
+
+    # Duas passadas, porque a validação da planilha é ela própria auditoria e
+    # precisa aparecer na aba: a primeira grava o arquivo, a releitura vira
+    # verificação, a segunda grava o arquivo já com essas linhas dentro.
+    escrever(relatorio.verificacoes)
+    verificacoes_planilha = validar_planilha(
         destino, n_periodos=len(periodos), periodos=periodos
     )
+    relatorio = RelatorioAuditoria(relatorio.verificacoes + verificacoes_planilha)
+    escrever(relatorio.verificacoes)
+
+    # Conferência final sobre o arquivo entregue. Não realimenta o relatório —
+    # senão cada passada acrescentaria linhas e nunca se chegaria ao fim.
+    confirmacao = validar_planilha(destino, n_periodos=len(periodos), periodos=periodos)
+    falhas_confirmacao = [
+        c for c in confirmacao if c.resultado is not ResultadoCheck.PASS
+    ]
 
     (execucao / "auditoria.json").write_text(
         json.dumps([asdict(v) for v in relatorio.verificacoes],
@@ -321,10 +455,10 @@ def comando_relatar(diretorio: str, *, cfg=None) -> int:
             print(f"  [{verificacao.resultado.value}] {verificacao.check_id}: "
                   f"esperado {verificacao.esperado}, obtido {verificacao.obtido}")
 
-    for problema in problemas_planilha:
-        print(f"  [PLANILHA] {problema}")
+    for falha in falhas_confirmacao:
+        print(f"  [PLANILHA] {falha.check_id}: {falha.obtido} — {falha.detalhe}")
 
-    if not relatorio.aprovado or problemas_planilha:
+    if not relatorio.aprovado or falhas_confirmacao:
         print("\nA execução NÃO pode ser apresentada como concluída: há falhas de severidade alta.")
         return 1
 

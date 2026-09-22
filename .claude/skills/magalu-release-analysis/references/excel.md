@@ -77,8 +77,13 @@ existe para provar o que o documento dizia.
 ### 4. Documentos
 
 Uma linha por PDF, com os campos do contrato: `documento_id` · `titulo` · `tipo` ·
-`periodo_fiscal` · `periodo_rotulo` · `url_origem` · `data_publicacao` · `arquivo_local` ·
-`bytes` · `sha256` · `paginas` · `textual` · `baixado_em`.
+`periodo_fiscal` · `periodo_rotulo` · `url_origem` · `nome_servidor` · `data_publicacao` ·
+`arquivo_local` · `bytes` · `sha256` · `paginas` · `textual` · `baixado_em`.
+
+`nome_servidor` é o nome com que o servidor devolveu o arquivo (`Content-Disposition`). Na
+Central os links são tokens opacos que nada dizem sobre o documento: esse nome é a
+confirmação independente de que o PDF baixado é o release daquele período. Divergência
+entre ele e o período da listagem é pendência, não detalhe de nomenclatura.
 
 Inclua também os documentos **descartados** — com `tipo` e o motivo do descarte. Saber o que
 foi deixado de fora é parte de saber o que a análise cobre.

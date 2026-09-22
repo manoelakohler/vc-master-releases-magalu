@@ -100,6 +100,10 @@ class Documento:
     paginas: int | None = None
     textual: bool | None = None
     baixado_em: str | None = None
+    # Nome que o servidor deu ao arquivo no Content-Disposition. Na Central
+    # o link é opaco, então esta é a única declaração independente de que o
+    # PDF baixado é o release daquele período.
+    nome_servidor: str | None = None
     motivo_descarte: str | None = None
 
 

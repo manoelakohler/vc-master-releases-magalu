@@ -58,6 +58,9 @@ explícita para cada valor. Na dúvida sobre qual coluna originou o número, iss
 ### Duplicatas e lacunas
 
 - **Dois documentos para o mesmo período**: registre ambos, abra pendência, não escolha.
+  O período, porém, ocupa **uma única posição** na comparação: a régua é de períodos, não
+  de documentos. Repetido, o mesmo trimestre viraria duas colunas idênticas que o leitor
+  entende como períodos diferentes.
 - **Período faltando no meio da série** (ex.: `N=4` mas só existem 1T25, 2T25 e 4T25):
   a série mantém a posição vazia como `null`. Não deslize os valores para fechar o buraco —
   é assim que uma série inteira passa a comparar períodos errados.

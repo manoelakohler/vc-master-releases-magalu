@@ -39,12 +39,29 @@ def _valor_enum(valor):
     return valor.value if hasattr(valor, "value") else valor
 
 
+def contar_periodos_analisados(periodos, documentos) -> int:
+    """Quantos períodos foram de fato analisados, descontando os descartados.
+
+    Um PDF não textual continua listado na aba Documentos com o motivo, mas não
+    foi lido. Contá-lo faz o Resumo alegar cobertura que a auditoria nega — e
+    duas células do mesmo arquivo em contradição é o pior tipo de erro aqui.
+    """
+    periodos = tuple(periodos)
+    descartados = {
+        d.periodo.canonico for d in documentos if d.periodo and d.motivo_descarte
+    }
+    analisados = {
+        d.periodo.canonico for d in documentos if d.periodo and not d.motivo_descarte
+    }
+    return len([c for c in periodos if c not in descartados or c in analisados])
+
+
 def montar_esqueleto(
     *, n_pedido, periodos, rotulos, series, variacoes, pendencias, documentos
 ) -> str:
     """Monta o resumo factual a partir do que foi apurado."""
     periodos = tuple(periodos)
-    n_obtido = len(periodos)
+    n_obtido = contar_periodos_analisados(periodos, documentos)
     linhas: list[str] = []
 
     linhas.append(SECOES[0])

@@ -15,6 +15,7 @@ Duas decisões que parecem detalhes e não são:
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -22,7 +23,21 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from magalu_releases.auditoria.checks import verificacao
+from magalu_releases.models import VerificacaoAuditoria
+from magalu_releases.periodos import PeriodoIndeterminado, interpretar_periodo
+from magalu_releases.saida.resumo import contar_periodos_analisados
+from magalu_releases.vocabularios import Severidade
+
 ABAS = ("Resumo", "Comparativo", "Evidências", "Documentos", "Pendências", "Auditoria")
+
+# Os quatro checks de planilha da skill, na ordem em que aparecem na aba.
+_CHECKS_PLANILHA = (
+    ("xls_abas", "As seis abas existem, com nomes e ordem corretos"),
+    ("xls_colunas_periodo", "Comparativo tem N colunas de período em ordem crescente"),
+    ("xls_texto_preservado", "valor_original e trecho_fonte gravados como texto"),
+    ("xls_reabertura", "Arquivo reabre e as verificações passam sobre o conteúdo lido"),
+)
 
 _FONTE = "Arial"
 _FONTE_CABECALHO = Font(name=_FONTE, bold=True, color="FFFFFF")
@@ -39,8 +54,8 @@ _COLUNAS_EVIDENCIAS = (
 )
 _COLUNAS_DOCUMENTOS = (
     "documento_id", "titulo", "tipo", "periodo_canonico", "periodo_rotulo", "url_origem",
-    "data_publicacao", "arquivo_local", "bytes", "sha256", "paginas", "textual",
-    "baixado_em", "motivo_descarte",
+    "nome_servidor", "data_publicacao", "arquivo_local", "bytes", "sha256", "paginas",
+    "textual", "baixado_em", "motivo_descarte",
 )
 _COLUNAS_PENDENCIAS = (
     "pendencia_id", "tipo", "severidade", "descricao", "referencias",
@@ -53,6 +68,7 @@ _COLUNAS_AUDITORIA = (
 # Colunas cujo conteúdo é prova documental e não pode ser reinterpretado.
 _COLUNAS_LITERAIS = frozenset(
     {"valor_original", "trecho_fonte", "periodo_rotulo", "periodo_canonico", "sha256",
+     "nome_servidor",
      "fato_id", "documento_id", "serie_id", "pendencia_id", "check_id"}
 )
 
@@ -143,7 +159,7 @@ def _aba_resumo(aba, n_pedido, periodos, rotulos, documentos, pendencias, resumo
                 auditoria, fonte, run_id, series, variacoes):
     aba.cell(row=1, column=1, value="Análise de releases de resultados").font = _FONTE_TITULO
 
-    n_obtido = len({d.periodo.canonico for d in documentos if d.periodo})
+    n_obtido = contar_periodos_analisados(periodos, documentos)
     falhas = [v for v in auditoria if _valor_enum(v.resultado) == "FAIL"]
 
     cabecalho = [
@@ -274,6 +290,7 @@ def _aba_documentos(aba, documentos):
             "periodo_canonico": d.periodo.canonico if d.periodo else None,
             "periodo_rotulo": d.periodo.rotulo if d.periodo else None,
             "url_origem": d.url_origem,
+            "nome_servidor": d.nome_servidor,
             "data_publicacao": d.data_publicacao,
             "arquivo_local": d.arquivo_local,
             "bytes": d.bytes,
@@ -336,57 +353,180 @@ def _aba_auditoria(aba, verificacoes):
                 celula.font = vermelho
 
 
-def validar_planilha(caminho: Path | str, *, n_periodos: int, periodos=()) -> tuple[str, ...]:
-    """Reabre o arquivo e confere o conteúdo.
+def validar_planilha(
+    caminho: Path | str, *, n_periodos: int, periodos=()
+) -> tuple[VerificacaoAuditoria, ...]:
+    """Reabre o arquivo e confere o conteúdo, como verificações auditáveis.
 
     Gravar sem erro não prova que a planilha está certa — só a releitura prova.
+    E o resultado dessa releitura é auditoria: vira linha na aba Auditoria, como
+    qualquer outro check, inclusive quando passa.
     """
-    problemas: list[str] = []
     destino = Path(caminho)
     if not destino.is_file():
-        return (f"arquivo não encontrado: {destino}",)
+        return _todas_falham(f"arquivo não encontrado: {destino}")
 
-    wb = load_workbook(destino)
+    try:
+        wb = load_workbook(destino)
+    except Exception as erro:  # arquivo corrompido é falha de reabertura
+        return _todas_falham(f"arquivo não pôde ser reaberto: {erro}")
 
-    if wb.sheetnames != list(ABAS):
-        problemas.append(f"abas esperadas {list(ABAS)}, obtidas {wb.sheetnames}")
-        return tuple(problemas)
+    abas_ok = wb.sheetnames == list(ABAS)
+    checks = [
+        verificacao(
+            "xls_abas",
+            "As seis abas existem, com nomes e ordem corretos",
+            list(ABAS),
+            wb.sheetnames,
+            abas_ok,
+            Severidade.ALTA,
+        )
+    ]
+    if not abas_ok:
+        # Sem as abas certas, os demais checks não têm onde olhar.
+        checks.extend(
+            _falha(check_id, descricao, "estrutura de abas inválida")
+            for check_id, descricao in _CHECKS_PLANILHA[1:]
+        )
+        return tuple(checks)
 
     comparativo = wb["Comparativo"]
     cabecalhos = [c.value for c in comparativo[1]]
-    colunas_periodo = [h for h in cabecalhos if h and _parece_periodo(str(h))]
+    colunas_periodo = [str(h) for h in cabecalhos if h and _parece_periodo(str(h))]
+    detalhes_periodo = []
     if len(colunas_periodo) != n_periodos:
-        problemas.append(
-            f"Comparativo deveria ter {n_periodos} colunas de período, tem {len(colunas_periodo)}"
+        detalhes_periodo.append(
+            f"{len(colunas_periodo)} coluna(s) de período para {n_periodos} período(s)"
         )
+    if not _em_ordem_crescente(colunas_periodo):
+        detalhes_periodo.append(f"fora de ordem crescente: {colunas_periodo}")
+    checks.append(
+        verificacao(
+            "xls_colunas_periodo",
+            "Comparativo tem N colunas de período em ordem crescente",
+            f"{n_periodos} colunas em ordem crescente",
+            f"{len(colunas_periodo)} coluna(s)",
+            not detalhes_periodo,
+            Severidade.ALTA,
+            "; ".join(detalhes_periodo),
+        )
+    )
 
     evidencias = wb["Evidências"]
     colunas_evidencias = [c.value for c in evidencias[1]]
-    for obrigatoria in ("documento_id", "pagina", "trecho_fonte", "valor_original"):
-        if obrigatoria not in colunas_evidencias:
-            problemas.append(f"Evidências sem a coluna {obrigatoria!r}")
+    detalhes_texto = [
+        f"Evidências sem a coluna {obrigatoria!r}"
+        for obrigatoria in ("documento_id", "pagina", "trecho_fonte", "valor_original")
+        if obrigatoria not in colunas_evidencias
+    ]
+    # Toda linha, não só a primeira: o trecho é a prova documental, e uma célula
+    # reinterpretada pelo Excel deixa de provar o que estava no release.
+    for nome in ("valor_original", "trecho_fonte"):
+        if nome not in colunas_evidencias:
+            continue
+        coluna = colunas_evidencias.index(nome) + 1
+        reformatadas = [
+            linha
+            for linha in range(2, evidencias.max_row + 1)
+            if evidencias.cell(row=linha, column=coluna).value is not None
+            and evidencias.cell(row=linha, column=coluna).number_format != _TEXTO
+        ]
+        if reformatadas:
+            detalhes_texto.append(
+                f"{nome} fora do formato texto na(s) linha(s) "
+                + ", ".join(str(linha) for linha in reformatadas[:10])
+            )
+    checks.append(
+        verificacao(
+            "xls_texto_preservado",
+            "valor_original e trecho_fonte gravados como texto",
+            "0 células reinterpretadas",
+            f"{len(detalhes_texto)} problema(s)",
+            not detalhes_texto,
+            Severidade.ALTA,
+            "; ".join(detalhes_texto),
+        )
+    )
 
-    if "valor_original" in colunas_evidencias and evidencias.max_row > 1:
-        coluna = colunas_evidencias.index("valor_original") + 1
-        celula = evidencias.cell(row=2, column=coluna)
-        if celula.number_format != _TEXTO:
-            problemas.append("valor_original não está formatado como texto")
-
-    ids_documentos = _coluna_como_conjunto(wb["Documentos"], "documento_id")
-    for linha in range(2, evidencias.max_row + 1):
-        if "documento_id" not in colunas_evidencias:
-            break
+    detalhes_reabertura = []
+    if "documento_id" in colunas_evidencias:
+        ids_documentos = _coluna_como_conjunto(wb["Documentos"], "documento_id")
         coluna = colunas_evidencias.index("documento_id") + 1
-        valor = evidencias.cell(row=linha, column=coluna).value
-        if valor and valor not in ids_documentos:
-            problemas.append(f"Evidências referenciam documento inexistente: {valor!r}")
-
+        for linha in range(2, evidencias.max_row + 1):
+            valor = evidencias.cell(row=linha, column=coluna).value
+            if valor and valor not in ids_documentos:
+                detalhes_reabertura.append(
+                    f"Evidências referenciam documento inexistente: {valor!r}"
+                )
     if wb["Pendências"].max_row < 2:
-        problemas.append("aba Pendências vazia: declare explicitamente quando não houver")
+        detalhes_reabertura.append(
+            "aba Pendências vazia: declare explicitamente quando não houver"
+        )
     if wb["Auditoria"].max_row < 2:
-        problemas.append("aba Auditoria sem verificações: a auditoria não foi registrada")
+        detalhes_reabertura.append(
+            "aba Auditoria sem verificações: a auditoria não foi registrada"
+        )
+    checks.append(
+        verificacao(
+            "xls_reabertura",
+            "Arquivo reabre e as verificações passam sobre o conteúdo lido",
+            "0 problemas na releitura",
+            f"{len(detalhes_reabertura)} problema(s)",
+            not detalhes_reabertura,
+            Severidade.ALTA,
+            "; ".join(dict.fromkeys(detalhes_reabertura)),
+        )
+    )
 
-    return tuple(problemas)
+    return tuple(checks)
+
+
+def _falha(check_id: str, descricao: str, motivo: str) -> VerificacaoAuditoria:
+    return verificacao(check_id, descricao, "verificação executada", motivo, False, Severidade.ALTA)
+
+
+def _todas_falham(motivo: str) -> tuple[VerificacaoAuditoria, ...]:
+    """Planilha ilegível reprova as quatro: nenhuma delas chegou a rodar."""
+    return tuple(
+        _falha(check_id, descricao, motivo) for check_id, descricao in _CHECKS_PLANILHA
+    )
+
+
+_CANONICO = re.compile(r"^(\d{4})-(?:Q([1-4])|(\d{1,2})M|FY)$")
+
+
+def _chave_do_cabecalho(texto: str) -> tuple[int, int] | None:
+    """Chave de ordenação do cabeçalho, venha ele como rótulo ou como canônico.
+
+    A coluna leva o rótulo do documento (`2T26`) quando algum documento o
+    trouxe, e o canônico (`2026-Q2`) como reserva. Entender só uma das duas
+    formas faz o check passar sem verificar nada na outra.
+    """
+    try:
+        return interpretar_periodo(texto).chave_ordenacao
+    except PeriodoIndeterminado:
+        pass
+
+    achado = _CANONICO.match(texto.strip())
+    if not achado:
+        return None
+    ano = int(achado.group(1))
+    if achado.group(2):
+        return (ano, int(achado.group(2)))
+    if achado.group(3):
+        return (ano, int(achado.group(3)) // 3)
+    return (ano, 4)
+
+
+def _em_ordem_crescente(rotulos) -> bool:
+    """Ordem pelo período fiscal, não pela string: 4T25 vem antes de 1T26."""
+    chaves = []
+    for rotulo in rotulos:
+        chave = _chave_do_cabecalho(rotulo)
+        if chave is None:
+            return True  # cabeçalho que não é período não diz nada sobre a ordem
+        chaves.append(chave)
+    return chaves == sorted(chaves)
 
 
 def _parece_periodo(texto: str) -> bool:

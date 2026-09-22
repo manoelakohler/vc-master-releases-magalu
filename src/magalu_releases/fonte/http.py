@@ -11,9 +11,10 @@ cliente espaça requisições e faz backoff exponencial em vez de insistir.
 
 from __future__ import annotations
 
+import re
 import time
-from dataclasses import dataclass
-from typing import Callable, Protocol
+from dataclasses import dataclass, field
+from typing import Callable, Mapping, Protocol
 
 from magalu_releases.config import ConfigHttp
 
@@ -22,12 +23,31 @@ class FalhaHttp(Exception):
     """A requisição não pôde ser concluída. Falha alto: nunca devolve conteúdo parcial."""
 
 
+_NOME_NO_DISPOSITION = re.compile(
+    r"""filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?""", re.IGNORECASE
+)
+
+
 @dataclass(frozen=True, slots=True)
 class Resposta:
     status: int
     url_final: str
     conteudo: bytes
     content_type: str
+    cabecalhos: Mapping[str, str] = field(default_factory=dict)
+
+    @property
+    def nome_arquivo(self) -> str | None:
+        """Nome que o servidor deu ao arquivo, quando ele deu.
+
+        Na Central os links são opacos — `Download.aspx?Arquivo=<token>` não diz
+        nada sobre o documento. O `Content-Disposition` é a única declaração do
+        próprio servidor sobre o que aquele arquivo é, e é o que permite
+        confirmar que o PDF baixado é o release do período esperado.
+        """
+        bruto = self.cabecalhos.get("Content-Disposition") or ""
+        achado = _NOME_NO_DISPOSITION.search(bruto)
+        return achado.group(1).strip() if achado else None
 
 
 class _Sessao(Protocol):
@@ -90,6 +110,7 @@ class ClienteHttp:
                     url_final=getattr(bruta, "url", url),
                     conteudo=bruta.content,
                     content_type=bruta.headers.get("Content-Type", ""),
+                    cabecalhos=dict(bruta.headers),
                 )
 
             if status not in self.cfg.status_para_retentar:

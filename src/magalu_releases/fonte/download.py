@@ -62,12 +62,15 @@ def baixar_documento(cliente, documento: Documento, diretorio: Path | str) -> Do
             f"(content-type={resposta.content_type!r}, início={inicio!r})"
         )
 
+    # O nome local vem do documento_id, nunca do servidor: nome de arquivo
+    # vindo de fora é caminho controlado por terceiro.
     nome = _nome_arquivo(documento)
     (destino / nome).write_bytes(conteudo)
 
     return replace(
         documento,
         arquivo_local=nome,
+        nome_servidor=getattr(resposta, "nome_arquivo", None),
         bytes=len(conteudo),
         sha256=calcular_sha256(conteudo),
         baixado_em=datetime.now(timezone.utc).isoformat(timespec="seconds"),

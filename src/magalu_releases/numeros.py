@@ -42,7 +42,7 @@ _MOEDA = re.compile(r"r\$", re.IGNORECASE)
 
 # "Prejuízo" e "queda" com número positivo significam valor negativo. Perder isso
 # transforma prejuízo em lucro.
-_ROTULOS_NEGATIVOS = re.compile(r"preju[íi]zo|queda|redu[çc][ãa]o|perda", re.IGNORECASE)
+ROTULOS_NEGATIVOS = re.compile(r"preju[íi]zo|queda|redu[çc][ãa]o|perda", re.IGNORECASE)
 
 # Fatores para unificar escala dentro de uma série. Só monetárias convertem:
 # "lojas" e "%" não têm escala, e forçar conversão inventaria significado.
@@ -193,7 +193,7 @@ def interpretar_valor(
             motivo="não foi possível interpretar o texto como número brasileiro",
         )
 
-    if rotulo and _ROTULOS_NEGATIVOS.search(rotulo) and numero > 0:
+    if rotulo and ROTULOS_NEGATIVOS.search(rotulo) and numero > 0:
         numero = -numero
 
     return ValorInterpretado(

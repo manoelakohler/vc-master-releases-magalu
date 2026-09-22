@@ -126,3 +126,35 @@ class TestListaVazia:
         assert r.n_obtido == 0
         assert r.selecionados == ()
         assert r.faltou_documento is True
+
+
+class TestPeriodosSemRepeticao:
+    """`periodos` descreve a régua da comparação, não a lista de documentos.
+
+    Com duplicata no mesmo trimestre, o canônico repetido vira duas posições na
+    série e duas colunas no Comparativo — idênticas, lado a lado. Os checks
+    passam (a contagem bate com a régua torta) e o leitor vê o mesmo trimestre
+    duas vezes como se fossem períodos diferentes.
+    """
+
+    def test_duplicata_nao_repete_o_canonico(self, documento_valido, universo):
+        gemeo = doc(documento_valido, "2T26", sufixo="b")
+        r = selecionar_releases(universo + [gemeo], 2)
+        assert r.periodos == ("2026-Q1", "2026-Q2")
+
+    def test_periodos_batem_com_n_obtido(self, documento_valido, universo):
+        gemeo = doc(documento_valido, "2T26", sufixo="b")
+        r = selecionar_releases(universo + [gemeo], 3)
+        assert len(r.periodos) == r.n_obtido
+
+    def test_os_dois_documentos_continuam_selecionados(self, documento_valido, universo):
+        """Deduplicar a régua não é escolher um documento: os dois ficam."""
+        gemeo = doc(documento_valido, "2T26", sufixo="b")
+        r = selecionar_releases(universo + [gemeo], 1)
+        assert len(r.selecionados) == 2
+        assert r.periodos == ("2026-Q2",)
+
+    def test_periodos_em_ordem_crescente(self, documento_valido, universo):
+        gemeo = doc(documento_valido, "4T25", sufixo="b")
+        r = selecionar_releases(universo + [gemeo], 4)
+        assert list(r.periodos) == sorted(r.periodos)

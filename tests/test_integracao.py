@@ -237,3 +237,234 @@ class TestPlanilhaResultante:
         for linha in range(2, aba.max_row + 1):
             if aba.cell(row=linha, column=col_resultado).value == "FAIL":
                 assert aba.cell(row=linha, column=col_severidade).value != "alta"
+
+
+class TestPendenciasDaFaseA:
+    """Pendência levantada na coleta precisa chegar à entrega.
+
+    Documento não classificado, período duplicado e lacuna trimestral são
+    detectados na Fase A e gravados no manifesto. Se a Fase C não os relê, eles
+    somem da planilha, do resumo e da auditoria — e a execução parece limpa.
+    """
+
+    PENDENCIA = {
+        "pendencia_id": "pen-0001",
+        "tipo": "conflito",
+        "severidade": "alta",
+        "descricao": "Período 2026-Q1 tem 2 documentos duplicados; ambos preservados",
+        "referencias": ["doc-1t26", "doc-1t26-bis"],
+        "valores_conflitantes": [],
+        "acao_sugerida": "Confirmar qual documento é o release oficial do período",
+        "status": "aberta",
+    }
+
+    def _com_pendencia(self, execucao):
+        caminho = execucao / "manifesto.json"
+        manifesto = json.loads(caminho.read_text(encoding="utf-8"))
+        manifesto["pendencias"] = [self.PENDENCIA]
+        caminho.write_text(json.dumps(manifesto, ensure_ascii=False), encoding="utf-8")
+        return execucao
+
+    def test_pendencia_chega_na_planilha(self, execucao):
+        comando_relatar(str(self._com_pendencia(execucao)), cfg=carregar_config())
+        planilha = list(execucao.glob("analise_*.xlsx"))[0]
+        aba = load_workbook(planilha)["Pendências"]
+        textos = [
+            aba.cell(row=linha, column=coluna).value
+            for linha in range(2, aba.max_row + 1)
+            for coluna in range(1, aba.max_column + 1)
+        ]
+        assert any("duplicados" in str(t) for t in textos)
+
+    def test_pendencia_chega_no_resumo(self, execucao):
+        comando_relatar(str(self._com_pendencia(execucao)), cfg=carregar_config())
+        resumo = (execucao / "resumo.md").read_text(encoding="utf-8")
+        assert "duplicados" in resumo
+
+    def test_manifesto_sem_a_chave_falha_alto(self, execucao, capsys):
+        caminho = execucao / "manifesto.json"
+        manifesto = json.loads(caminho.read_text(encoding="utf-8"))
+        del manifesto["pendencias"]
+        caminho.write_text(json.dumps(manifesto, ensure_ascii=False), encoding="utf-8")
+
+        codigo = comando_relatar(str(execucao), cfg=carregar_config())
+        assert codigo != 0
+        assert "pendencias" in capsys.readouterr().out
+
+
+class TestDescartadosChegamNaAuditoria:
+    """O que a seleção jogou fora precisa continuar rastreável.
+
+    A Central mistura ITR, apresentação, transcrição e comunicado com os
+    releases. O descarte é correto, mas sem registro ninguém distingue o
+    documento excluído por critério do documento perdido por falha da coleta.
+    """
+
+    DESCARTADO = {
+        "documento_id": "doc-itr-1t26",
+        "titulo": "ITR",
+        "tipo": "itr_dfp",
+        "periodo": {"canonico": "2026-Q1", "rotulo": "1T26"},
+        "url_origem": "https://ri.magazineluiza.com.br/x/itr-1t26.pdf",
+        "data_publicacao": None,
+        "arquivo_local": None,
+        "bytes": None,
+        "sha256": None,
+        "paginas": None,
+        "textual": None,
+        "baixado_em": None,
+        "motivo_descarte": "tipo itr_dfp não é release de resultados",
+    }
+
+    def _com_descartado(self, execucao, **ajustes):
+        caminho = execucao / "manifesto.json"
+        manifesto = json.loads(caminho.read_text(encoding="utf-8"))
+        manifesto["descartados"] = [dict(self.DESCARTADO, **ajustes)]
+        caminho.write_text(json.dumps(manifesto, ensure_ascii=False), encoding="utf-8")
+        return execucao
+
+    def _auditoria(self, execucao):
+        verificacoes = json.loads((execucao / "auditoria.json").read_text(encoding="utf-8"))
+        return {v["check_id"]: v for v in verificacoes}
+
+    def test_descartado_com_motivo_aprova(self, execucao):
+        comando_relatar(str(self._com_descartado(execucao)), cfg=carregar_config())
+        check = self._auditoria(execucao)["sel_descartados"]
+        assert check["resultado"] == "PASS"
+        assert "1" in check["esperado"]
+
+    def test_descartado_sem_motivo_reprova(self, execucao):
+        comando_relatar(
+            str(self._com_descartado(execucao, motivo_descarte=None)), cfg=carregar_config()
+        )
+        assert self._auditoria(execucao)["sel_descartados"]["resultado"] == "FAIL"
+
+    def test_descartado_nao_entra_na_aba_documentos(self, execucao):
+        """A aba Documentos descreve os PDFs analisados; o descartado não é um."""
+        comando_relatar(str(self._com_descartado(execucao)), cfg=carregar_config())
+        planilha = list(execucao.glob("analise_*.xlsx"))[0]
+        aba = load_workbook(planilha)["Documentos"]
+        ids = {aba.cell(row=linha, column=1).value for linha in range(2, aba.max_row + 1)}
+        assert "doc-itr-1t26" not in ids
+
+
+class TestChecksDaPlanilhaNaAuditoria:
+    """A validação da planilha precisa aparecer dentro da própria planilha.
+
+    Saindo só no terminal, ela não acompanha o arquivo: quem recebe a planilha
+    não tem como saber se a releitura foi feita nem o que ela encontrou.
+    """
+
+    IDS = {"xls_abas", "xls_colunas_periodo", "xls_texto_preservado", "xls_reabertura"}
+
+    def _aba_auditoria(self, execucao):
+        planilha = list(execucao.glob("analise_*.xlsx"))[0]
+        aba = load_workbook(planilha)["Auditoria"]
+        cabecalhos = [c.value for c in aba[1]]
+        col_id = cabecalhos.index("check_id") + 1
+        col_resultado = cabecalhos.index("resultado") + 1
+        return {
+            aba.cell(row=linha, column=col_id).value: aba.cell(
+                row=linha, column=col_resultado
+            ).value
+            for linha in range(2, aba.max_row + 1)
+        }
+
+    def test_os_quatro_checks_viram_linha(self, execucao):
+        comando_relatar(str(execucao), cfg=carregar_config())
+        assert self.IDS <= set(self._aba_auditoria(execucao))
+
+    def test_checks_da_planilha_passam_na_execucao_integra(self, execucao):
+        comando_relatar(str(execucao), cfg=carregar_config())
+        resultados = self._aba_auditoria(execucao)
+        assert all(resultados[check] == "PASS" for check in self.IDS)
+
+    def test_auditoria_json_tambem_registra(self, execucao):
+        comando_relatar(str(execucao), cfg=carregar_config())
+        registrados = {
+            v["check_id"]
+            for v in json.loads((execucao / "auditoria.json").read_text(encoding="utf-8"))
+        }
+        assert self.IDS <= registrados
+
+
+class TestCoberturaDeclaradaNoResumo:
+    """Resumo e auditoria não podem discordar sobre quanto período foi coberto.
+
+    O documento descartado continua na aba Documentos com o motivo, mas não foi
+    analisado. Contá-lo como analisado faz a planilha dizer que cobriu três
+    trimestres enquanto a auditoria diz dois — e duas células do mesmo arquivo
+    se contradizendo é exatamente o que esta entrega existe para evitar.
+    """
+
+    def _com_descarte(self, execucao):
+        caminho = execucao / "documentos.json"
+        documentos = json.loads(caminho.read_text(encoding="utf-8"))
+        documentos[-1]["textual"] = False
+        documentos[-1]["motivo_descarte"] = (
+            "apenas 1/3 páginas com texto (mínimo 50%); sem OCR, o documento não é processado"
+        )
+        caminho.write_text(json.dumps(documentos, ensure_ascii=False), encoding="utf-8")
+        return execucao
+
+    def _resumo_da_planilha(self, execucao):
+        planilha = list(execucao.glob("analise_*.xlsx"))[0]
+        aba = load_workbook(planilha)["Resumo"]
+        return {
+            aba.cell(row=linha, column=1).value: aba.cell(row=linha, column=2).value
+            for linha in range(1, aba.max_row + 1)
+        }
+
+    def test_planilha_declara_n_obtido_sem_o_descartado(self, execucao):
+        comando_relatar(str(self._com_descarte(execucao)), cfg=carregar_config())
+        assert self._resumo_da_planilha(execucao)["N obtido"] == 1
+
+    def test_planilha_avisa_que_faltou_release(self, execucao):
+        comando_relatar(str(self._com_descarte(execucao)), cfg=carregar_config())
+        planilha = list(execucao.glob("analise_*.xlsx"))[0]
+        aba = load_workbook(planilha)["Resumo"]
+        textos = [aba.cell(row=linha, column=1).value for linha in range(1, aba.max_row + 1)]
+        assert any("ATENÇÃO" in str(t) for t in textos)
+
+    def test_resumo_md_concorda_com_a_auditoria(self, execucao):
+        comando_relatar(str(self._com_descarte(execucao)), cfg=carregar_config())
+        resumo = (execucao / "resumo.md").read_text(encoding="utf-8")
+        assert "Releases pedidos: 2. Releases analisados: 1." in resumo
+
+        auditoria = {
+            v["check_id"]: v
+            for v in json.loads((execucao / "auditoria.json").read_text(encoding="utf-8"))
+        }
+        assert auditoria["sel_quantidade"]["obtido"] == "1"
+
+
+class TestReguaDePeriodosUnica:
+    """A régua da comparação não admite período repetido.
+
+    Manifesto com canônico duplicado produzia duas colunas idênticas no
+    Comparativo, e todos os checks passavam: a contagem batia com a régua
+    torta. Como o manifesto é escrito por máquina, repetição ali significa
+    coleta antiga ou corrompida — e isso se declara, não se conserta em
+    silêncio por baixo de uma análise já escrita contra aquele dossiê.
+    """
+
+    def _com_periodo_repetido(self, execucao):
+        caminho = execucao / "manifesto.json"
+        manifesto = json.loads(caminho.read_text(encoding="utf-8"))
+        manifesto["periodos"] = ["2026-Q1", "2026-Q2", "2026-Q2"]
+        caminho.write_text(json.dumps(manifesto, ensure_ascii=False), encoding="utf-8")
+        return execucao
+
+    def test_periodo_repetido_no_manifesto_falha_alto(self, execucao, capsys):
+        codigo = comando_relatar(str(self._com_periodo_repetido(execucao)), cfg=carregar_config())
+        saida = capsys.readouterr().out
+        assert codigo != 0
+        assert "2026-Q2" in saida
+
+    def test_nao_gera_planilha_com_coluna_repetida(self, execucao):
+        comando_relatar(str(self._com_periodo_repetido(execucao)), cfg=carregar_config())
+        assert not list(execucao.glob("analise_*.xlsx"))
+
+    def test_regua_integra_continua_passando(self, execucao):
+        assert comando_relatar(str(execucao), cfg=carregar_config()) == 0
+

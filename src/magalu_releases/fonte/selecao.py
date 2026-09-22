@@ -34,7 +34,16 @@ class ResultadoSelecao:
 
     @property
     def periodos(self) -> tuple[str, ...]:
-        return tuple(d.periodo.canonico for d in self.selecionados if d.periodo)
+        """A régua da comparação: um período por posição, em ordem crescente.
+
+        Dois documentos do mesmo trimestre continuam ambos selecionados — a
+        duplicata é pendência, não escolha silenciosa —, mas o período aparece
+        uma vez só. Repetido, ele viraria duas colunas idênticas no Comparativo
+        que o leitor lê como trimestres diferentes.
+        """
+        return tuple(
+            dict.fromkeys(d.periodo.canonico for d in self.selecionados if d.periodo)
+        )
 
 
 def selecionar_releases(documentos, n: int) -> ResultadoSelecao:

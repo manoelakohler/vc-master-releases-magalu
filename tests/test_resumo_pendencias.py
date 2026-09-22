@@ -5,6 +5,8 @@ código faz é montar o esqueleto com os fatos já apurados e recusar linguagem
 que soe como recomendação — duas tarefas determinísticas.
 """
 
+import json
+
 import pytest
 
 from magalu_releases.models import Pendencia, PontoSerie, Serie, Variacao
@@ -23,6 +25,11 @@ from magalu_releases.vocabularios import (
 
 PERIODOS = ("2025-Q4", "2026-Q1", "2026-Q2")
 ROTULOS = {"2025-Q4": "4T25", "2026-Q1": "1T26", "2026-Q2": "2T26"}
+
+
+def _json_enum(objeto):
+    """Serializa enums como o manifesto da Fase A os grava."""
+    return objeto.value if hasattr(objeto, "value") else str(objeto)
 
 
 def serie_exemplo(valores=(9112.0, None, 9856.4), tipo=TipoValor.ABSOLUTO, unidade="R$ milhões"):
@@ -156,3 +163,79 @@ class TestConsolidacaoDePendencias:
 
     def test_nada_a_consolidar(self):
         assert consolidar_pendencias() == ()
+
+
+class TestPendenciaDeDict:
+    """As pendências da Fase A viajam pelo manifesto como JSON e precisam voltar.
+
+    Sem a volta, cada pendência de seleção — documento não classificado, período
+    duplicado, lacuna trimestral — some entre as fases sem deixar rastro.
+    """
+
+    def _pendencia(self):
+        return Pendencia(
+            pendencia_id="pen-0001",
+            tipo=Gatilho.CONFLITO,
+            severidade=Severidade.ALTA,
+            descricao="Período 2026-Q1 tem 2 documentos duplicados",
+            referencias=("doc-a", "doc-b"),
+            valores_conflitantes=("doc-a p.7: 9.856,4", "doc-b p.7: 9.855,0"),
+            acao_sugerida="Confirmar qual documento é o release oficial",
+        )
+
+    def test_roundtrip_preserva_o_conteudo(self):
+        from dataclasses import asdict
+
+        from magalu_releases.saida.pendencias import pendencia_de_dict
+
+        original = self._pendencia()
+        bruto = json.loads(json.dumps(asdict(original), default=_json_enum))
+        assert pendencia_de_dict(bruto) == original
+
+    def test_enums_voltam_como_enum(self):
+        from magalu_releases.saida.pendencias import pendencia_de_dict
+
+        volta = pendencia_de_dict(
+            {
+                "pendencia_id": "pen-0002",
+                "tipo": "ambiguidade",
+                "severidade": "media",
+                "descricao": "documento sem classificação",
+                "referencias": ["doc-x"],
+                "valores_conflitantes": [],
+                "acao_sugerida": "conferir",
+                "status": "aberta",
+            }
+        )
+        assert volta.tipo is Gatilho.AMBIGUIDADE
+        assert volta.severidade is Severidade.MEDIA
+        assert volta.referencias == ("doc-x",)
+
+    def test_tipo_fora_do_vocabulario_falha_alto(self):
+        from magalu_releases.saida.pendencias import PendenciaInvalida, pendencia_de_dict
+
+        with pytest.raises(PendenciaInvalida):
+            pendencia_de_dict(
+                {
+                    "pendencia_id": "pen-0003",
+                    "tipo": "gatilho_inventado",
+                    "severidade": "alta",
+                    "descricao": "x",
+                }
+            )
+
+    def test_consolidar_aceita_dicts_convertidos(self):
+        from magalu_releases.saida.pendencias import pendencia_de_dict
+
+        vinda_do_manifesto = pendencia_de_dict(
+            {
+                "pendencia_id": "pen-0001",
+                "tipo": "conflito",
+                "severidade": "alta",
+                "descricao": "duplicata de período",
+                "referencias": ["doc-a", "doc-b"],
+            }
+        )
+        consolidadas = consolidar_pendencias([vinda_do_manifesto])
+        assert len(consolidadas) == 1
+        assert consolidadas[0].tipo is Gatilho.CONFLITO

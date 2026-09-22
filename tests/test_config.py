@@ -13,7 +13,18 @@ def test_carrega_config_padrao():
 def test_fonte_e_o_dominio_oficial():
     cfg = carregar_config()
     assert cfg.fonte.dominio_oficial == "ri.magazineluiza.com.br"
-    assert cfg.fonte.url_central.startswith("https://ri.magazineluiza.com.br")
+    assert cfg.fonte.base_url.startswith("https://ri.magazineluiza.com.br")
+
+
+def test_url_da_central_nao_e_congelada():
+    """O site exige token de canal na URL da Central, e ele muda.
+
+    Congelada em configuração, a URL respondeu HTTP 500 quando o site mudou de
+    estrutura — uma fonte oficial que silenciosamente deixou de existir. Agora
+    só o ponto de partida é configurado; a Central é descoberta na home.
+    """
+    cfg = carregar_config()
+    assert not hasattr(cfg.fonte, "url_central")
 
 
 def test_cabecalhos_http_completos():
@@ -50,4 +61,4 @@ def test_config_e_imutavel():
     """Configuração mutável em tempo de execução reintroduz valor espalhado."""
     cfg = carregar_config()
     with pytest.raises(Exception):
-        cfg.fonte.url_central = "https://exemplo.invalido/"
+        cfg.fonte.base_url = "https://exemplo.invalido/"

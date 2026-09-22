@@ -133,3 +133,45 @@ class TestEducacaoComOSite:
         cliente, dormidas = construir(cfg_http, [RespostaFalsa(200)])
         cliente.obter("https://exemplo/")
         assert all(d == 0 for d in dormidas)
+
+
+class TestCabecalhosDaResposta:
+    """O servidor nomeia o arquivo no `Content-Disposition`.
+
+    Na Central os links são opacos (`Download.aspx?Arquivo=<token>`): o nome
+    real do arquivo só chega por cabeçalho. Descartá-lo na fronteira de rede
+    joga fora a confirmação de que o PDF baixado é mesmo o release daquele
+    período.
+    """
+
+    def test_resposta_preserva_os_cabecalhos(self, cfg_http):
+        bruta = RespostaFalsa(200, content_type="application/pdf")
+        bruta.headers["Content-Disposition"] = 'inline; filename="MGLU_ER_1T26_POR.pdf"'
+        cliente, _ = construir(cfg_http, [bruta])
+
+        resposta = cliente.obter("https://exemplo/Download.aspx?Arquivo=abc")
+        assert resposta.cabecalhos["Content-Disposition"] == (
+            'inline; filename="MGLU_ER_1T26_POR.pdf"'
+        )
+
+    def test_nome_do_arquivo_extraido_do_cabecalho(self, cfg_http):
+        bruta = RespostaFalsa(200, content_type="application/pdf")
+        bruta.headers["Content-Disposition"] = 'inline; filename="MGLU_ER_1T26_POR.pdf"'
+        cliente, _ = construir(cfg_http, [bruta])
+
+        assert cliente.obter("https://exemplo/x").nome_arquivo == "MGLU_ER_1T26_POR.pdf"
+
+    def test_nome_com_aspas_simples_e_espacos(self, cfg_http):
+        bruta = RespostaFalsa(200, content_type="application/pdf")
+        bruta.headers["Content-Disposition"] = (
+            "attachment; filename='1T26 - Demonstrações Financeiras (DFS) - Magalu.pdf'"
+        )
+        cliente, _ = construir(cfg_http, [bruta])
+
+        assert cliente.obter("https://exemplo/x").nome_arquivo == (
+            "1T26 - Demonstrações Financeiras (DFS) - Magalu.pdf"
+        )
+
+    def test_sem_disposition_o_nome_e_nulo(self, cfg_http):
+        cliente, _ = construir(cfg_http, [RespostaFalsa(200)])
+        assert cliente.obter("https://exemplo/x").nome_arquivo is None

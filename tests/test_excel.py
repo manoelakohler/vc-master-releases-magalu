@@ -20,6 +20,7 @@ from magalu_releases.vocabularios import (
     BaseComparacao,
     Confianca,
     Periodicidade,
+    ResultadoCheck,
     Segmento,
     TipoValor,
 )
@@ -44,6 +45,7 @@ def pacote(fato_valido, documento_valido):
     documentos = [
         documento_valido(
             documento_id=f"doc-{c}",
+            nome_servidor="MGLU_ER_2T26_POR.pdf",
             periodo=interpretar_periodo(ROTULOS[c]),
             titulo=f"Release de Resultados {ROTULOS[c]}",
         )
@@ -244,17 +246,114 @@ class TestSemFormulas:
                         assert not celula.value.startswith("=")
 
 
-class TestValidacao:
-    def test_planilha_bem_formada_passa(self, planilha):
-        problemas = validar_planilha(planilha, n_periodos=3, periodos=PERIODOS)
-        assert problemas == ()
+class TestValidacaoComoVerificacao:
+    """A validação da planilha é auditoria, e auditoria vira linha na aba.
 
-    def test_detecta_aba_faltando(self, planilha):
+    Enquanto o resultado saía como texto no terminal, a aba Auditoria alegava
+    uma cobertura que não tinha: os checks `xls_*` da skill não apareciam em
+    lugar nenhum do arquivo entregue.
+    """
+
+    IDS = ("xls_abas", "xls_colunas_periodo", "xls_texto_preservado", "xls_reabertura")
+
+    def test_devolve_verificacoes_com_os_ids_da_skill(self, planilha):
+        verificacoes = validar_planilha(planilha, n_periodos=3, periodos=PERIODOS)
+        assert tuple(v.check_id for v in verificacoes) == self.IDS
+
+    def test_planilha_bem_formada_passa_em_todas(self, planilha):
+        verificacoes = validar_planilha(planilha, n_periodos=3, periodos=PERIODOS)
+        assert all(v.resultado is ResultadoCheck.PASS for v in verificacoes)
+
+    def test_aba_faltando_reprova_xls_abas(self, planilha):
         wb = load_workbook(planilha)
         del wb["Pendências"]
         wb.save(planilha)
-        assert validar_planilha(planilha, n_periodos=3, periodos=PERIODOS)
+        por_id = {v.check_id: v for v in validar_planilha(planilha, n_periodos=3, periodos=PERIODOS)}
+        assert por_id["xls_abas"].resultado is ResultadoCheck.FAIL
 
-    def test_detecta_coluna_de_periodo_faltando(self, planilha):
-        problemas = validar_planilha(planilha, n_periodos=4, periodos=PERIODOS + ("2026-Q3",))
-        assert problemas
+    def test_coluna_de_periodo_faltando_reprova_o_check_certo(self, planilha):
+        por_id = {
+            v.check_id: v
+            for v in validar_planilha(
+                planilha, n_periodos=4, periodos=PERIODOS + ("2026-Q3",)
+            )
+        }
+        assert por_id["xls_colunas_periodo"].resultado is ResultadoCheck.FAIL
+        assert por_id["xls_abas"].resultado is ResultadoCheck.PASS
+
+    def test_texto_preservado_cobre_trecho_fonte(self, planilha):
+        """O trecho é a evidência: reinterpretado pelo Excel, deixa de provar."""
+        wb = load_workbook(planilha)
+        aba = wb["Evidências"]
+        cabecalhos = [c.value for c in aba[1]]
+        coluna = cabecalhos.index("trecho_fonte") + 1
+        aba.cell(row=2, column=coluna).number_format = "General"
+        wb.save(planilha)
+
+        por_id = {v.check_id: v for v in validar_planilha(planilha, n_periodos=3, periodos=PERIODOS)}
+        assert por_id["xls_texto_preservado"].resultado is ResultadoCheck.FAIL
+
+    def test_texto_preservado_olha_todas_as_linhas(self, planilha):
+        wb = load_workbook(planilha)
+        aba = wb["Evidências"]
+        cabecalhos = [c.value for c in aba[1]]
+        coluna = cabecalhos.index("valor_original") + 1
+        aba.cell(row=aba.max_row, column=coluna).number_format = "General"
+        wb.save(planilha)
+
+        por_id = {v.check_id: v for v in validar_planilha(planilha, n_periodos=3, periodos=PERIODOS)}
+        assert por_id["xls_texto_preservado"].resultado is ResultadoCheck.FAIL
+
+
+class TestOrdemDasColunasDePeriodo:
+    """O cabeçalho pode vir no rótulo do documento (2T26) ou no canônico (2026-Q2).
+
+    Quando nenhum documento trouxe rótulo, a planilha cai no canônico. Se o
+    check só entende rótulo, ele passa sem olhar nada — e uma coluna fora de
+    ordem cronológica atravessa a auditoria alegando ter sido verificada.
+    """
+
+    def _trocar_cabecalhos(self, planilha, novos):
+        wb = load_workbook(planilha)
+        aba = wb["Comparativo"]
+        cabecalhos = [c.value for c in aba[1]]
+        colunas = [i + 1 for i, h in enumerate(cabecalhos) if h in ROTULOS.values()]
+        for coluna, valor in zip(colunas, novos):
+            aba.cell(row=1, column=coluna).value = valor
+        wb.save(planilha)
+
+    def test_canonicos_em_ordem_passam(self, planilha):
+        self._trocar_cabecalhos(planilha, ["2025-Q4", "2026-Q1", "2026-Q2"])
+        por_id = {v.check_id: v for v in validar_planilha(planilha, n_periodos=3, periodos=PERIODOS)}
+        assert por_id["xls_colunas_periodo"].resultado is ResultadoCheck.PASS
+
+    def test_canonicos_fora_de_ordem_reprovam(self, planilha):
+        self._trocar_cabecalhos(planilha, ["2026-Q2", "2025-Q4", "2026-Q1"])
+        por_id = {v.check_id: v for v in validar_planilha(planilha, n_periodos=3, periodos=PERIODOS)}
+        assert por_id["xls_colunas_periodo"].resultado is ResultadoCheck.FAIL
+
+    def test_rotulos_fora_de_ordem_reprovam(self, planilha):
+        self._trocar_cabecalhos(planilha, ["2T26", "4T25", "1T26"])
+        por_id = {v.check_id: v for v in validar_planilha(planilha, n_periodos=3, periodos=PERIODOS)}
+        assert por_id["xls_colunas_periodo"].resultado is ResultadoCheck.FAIL
+
+
+class TestNomeDoServidorNaPlanilha:
+    """A confirmação do servidor é evidência e pertence à entrega.
+
+    O link da Central não diz nada sobre o arquivo. Quem receber a planilha
+    precisa poder ver que o PDF baixado se identificou como o release daquele
+    período — e o nome que o servidor devolveu é essa prova.
+    """
+
+    def test_coluna_existe(self, planilha):
+        aba = load_workbook(planilha)["Documentos"]
+        assert "nome_servidor" in [c.value for c in aba[1]]
+
+    def test_nome_e_gravado_como_texto(self, planilha):
+        aba = load_workbook(planilha)["Documentos"]
+        cabecalhos = [c.value for c in aba[1]]
+        coluna = cabecalhos.index("nome_servidor") + 1
+        celula = aba.cell(row=2, column=coluna)
+        assert celula.value == "MGLU_ER_2T26_POR.pdf"
+        assert celula.number_format == "@"

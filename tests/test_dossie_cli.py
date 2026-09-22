@@ -164,3 +164,162 @@ class TestValidarFatosPelaCli:
         execucao.mkdir()
         assert main(["validar-fatos", "--run", str(execucao)]) != 0
         assert "fatos.json" in capsys.readouterr().out
+
+
+class TestColetaRegistraPendencia:
+    """O que a coleta perde precisa ficar visível na entrega.
+
+    PDF sem camada de texto e download que falhou hoje só produziam um aviso no
+    terminal. Aviso em terminal não chega à planilha: a execução segue com um
+    período a menos e nada na entrega diz por quê.
+    """
+
+    @staticmethod
+    def _cliente(pdfs, falhar=(), nomes=None):
+        """Serve a home, a Central e os PDFs — o caminho real da coleta.
+
+        `nomes` é o que o servidor devolve em Content-Disposition; por padrão
+        cada PDF vem nomeado como o release do seu período.
+        """
+        from fixtures.central_sintetica import HTML_CENTRAL, HTML_HOME
+        from magalu_releases.fonte.http import FalhaHttp
+
+        nomes = nomes or {}
+
+        class RespostaFalsa:
+            def __init__(self, conteudo, content_type, nome=None):
+                self.status = 200
+                self.url_final = "https://ri.magazineluiza.com.br/"
+                self.conteudo = conteudo
+                self.content_type = content_type
+                self.cabecalhos = (
+                    {"Content-Disposition": f'inline; filename="{nome}"'} if nome else {}
+                )
+                self.nome_arquivo = nome
+
+        class ClienteFalso:
+            def obter(self, url, referer=None):
+                if url.rstrip("/").endswith("magazineluiza.com.br"):
+                    return RespostaFalsa(HTML_HOME.encode("utf-8"), "text/html")
+                if "ListResultados" in url:
+                    return RespostaFalsa(HTML_CENTRAL.encode("utf-8"), "text/html")
+                for token, conteudo in pdfs.items():
+                    if token in url:
+                        if token in falhar:
+                            raise FalhaHttp(f"HTTP 403 em {url}")
+                        nome = nomes.get(token, f"MGLU_ER_{token.split('-')[-1]}_POR.pdf")
+                        return RespostaFalsa(conteudo, "application/pdf", nome)
+                raise FalhaHttp(f"HTTP 404 em {url}")
+
+        return ClienteFalso()
+
+    @staticmethod
+    def _pendencias(raiz):
+        execucao = next(raiz.iterdir())
+        manifesto = json.loads((execucao / "manifesto.json").read_text(encoding="utf-8"))
+        return manifesto["pendencias"]
+
+    def test_pdf_nao_textual_vira_pendencia(self, tmp_path):
+        from magalu_releases.cli import comando_coletar
+        from magalu_releases.config import carregar_config
+
+        cliente = self._cliente({"TOKEN-RELEASE-2T26": construir_pdf([[""]])})
+        comando_coletar(1, cfg=carregar_config(), cliente=cliente, raiz=tmp_path)
+
+        pendencias = self._pendencias(tmp_path)
+        assert any("textual" in p["descricao"].lower() for p in pendencias)
+        assert any(
+            "textual" in p["descricao"].lower() and p["severidade"] == "alta"
+            for p in pendencias
+        )
+
+    def test_download_que_falha_vira_pendencia(self, tmp_path):
+        from magalu_releases.cli import comando_coletar
+        from magalu_releases.config import carregar_config
+
+        cliente = self._cliente(
+            {"TOKEN-RELEASE-2T26": construir_pdf([PAGINA_TABELA])},
+            falhar={"TOKEN-RELEASE-2T26"},
+        )
+        comando_coletar(1, cfg=carregar_config(), cliente=cliente, raiz=tmp_path)
+
+        pendencias = self._pendencias(tmp_path)
+        assert any("403" in p["descricao"] or "baixado" in p["descricao"].lower()
+                   for p in pendencias)
+
+    def test_coleta_integra_nao_inventa_pendencia_de_coleta(self, tmp_path):
+        from magalu_releases.cli import comando_coletar
+        from magalu_releases.config import carregar_config
+
+        cliente = self._cliente({"TOKEN-RELEASE-2T26": construir_pdf([PAGINA_TABELA])})
+        comando_coletar(1, cfg=carregar_config(), cliente=cliente, raiz=tmp_path)
+
+        descricoes = " ".join(p["descricao"].lower() for p in self._pendencias(tmp_path))
+        assert "textual" not in descricoes
+        assert "não pôde ser baixado" not in descricoes
+
+
+class TestColetaRegistraDescartados:
+    """A Fase A precisa entregar à Fase C o que descartou, com o motivo."""
+
+    def test_manifesto_traz_os_descartados_com_motivo(self, tmp_path):
+        from magalu_releases.cli import comando_coletar
+        from magalu_releases.config import carregar_config
+
+        cliente = TestColetaRegistraPendencia._cliente(
+            {"TOKEN-RELEASE-2T26": construir_pdf([PAGINA_TABELA])}
+        )
+        comando_coletar(1, cfg=carregar_config(), cliente=cliente, raiz=tmp_path)
+
+        execucao = next(tmp_path.iterdir())
+        manifesto = json.loads((execucao / "manifesto.json").read_text(encoding="utf-8"))
+        descartados = manifesto["descartados"]
+        assert descartados, "a Central sintética tem ITR e apresentação para descartar"
+        assert all(d["motivo_descarte"] for d in descartados)
+        assert any(d["tipo"] == "itr_dfp" for d in descartados)
+
+
+class TestConfirmacaoDoReleaseNoDownload:
+    """O que o servidor nomeia manda sobre o que a listagem prometia.
+
+    O link da Central é um token opaco. Se o arquivo que volta se identifica
+    como outro documento — ou como outro período — seguir em frente colocaria
+    números do documento errado na planilha, com evidência apontando para um
+    release que nunca foi lido.
+    """
+
+    def _coletar(self, tmp_path, nome_devolvido):
+        from magalu_releases.cli import comando_coletar
+        from magalu_releases.config import carregar_config
+
+        cliente = TestColetaRegistraPendencia._cliente(
+            {"TOKEN-RELEASE-2T26": construir_pdf([PAGINA_TABELA])},
+            nomes={"TOKEN-RELEASE-2T26": nome_devolvido},
+        )
+        comando_coletar(1, cfg=carregar_config(), cliente=cliente, raiz=tmp_path)
+        execucao = next(tmp_path.iterdir())
+        return execucao, json.loads((execucao / "manifesto.json").read_text(encoding="utf-8"))
+
+    def test_documento_de_outro_tipo_vira_pendencia(self, tmp_path):
+        execucao, manifesto = self._coletar(
+            tmp_path, "2T26 - Demonstrações Financeiras (DFS) - Magalu.pdf"
+        )
+        assert any("não se identifica como release" in p["descricao"]
+                   for p in manifesto["pendencias"])
+
+    def test_documento_de_outro_periodo_vira_pendencia(self, tmp_path):
+        execucao, manifesto = self._coletar(tmp_path, "MGLU_ER_4T25_POR.pdf")
+        assert any("4T25" in p["descricao"] and "2T26" in p["descricao"]
+                   for p in manifesto["pendencias"])
+
+    def test_documento_nao_confirmado_nao_entra_no_dossie(self, tmp_path):
+        execucao, _ = self._coletar(tmp_path, "MGLU_ER_4T25_POR.pdf")
+        dossie = (execucao / "dossie.md").read_text(encoding="utf-8")
+        assert "Texto extraído" in dossie
+        assert "Receita Liquida" not in dossie
+
+    def test_release_confirmado_assume_o_nome_do_servidor(self, tmp_path):
+        execucao, _ = self._coletar(tmp_path, "MGLU_ER_2T26_POR.pdf")
+        documentos = json.loads((execucao / "documentos.json").read_text(encoding="utf-8"))
+        assert documentos[0]["titulo"] == "MGLU_ER_2T26_POR.pdf"
+        assert documentos[0]["nome_servidor"] == "MGLU_ER_2T26_POR.pdf"

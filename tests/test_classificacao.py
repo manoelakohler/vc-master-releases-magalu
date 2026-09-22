@@ -7,7 +7,12 @@ números é diferente — e o estrago fica invisível na planilha.
 
 import pytest
 
-from magalu_releases.fonte.classificacao import classificar_documento
+from magalu_releases.fonte.classificacao import (
+    classificar_documento,
+    classificar_por_identificador,
+    confirmar_release,
+    trimestre_do_identificador,
+)
 from magalu_releases.vocabularios import TipoDocumento as TD
 
 
@@ -92,3 +97,83 @@ class TestContextoAuxiliar:
     def test_titulo_explicito_tem_prioridade_sobre_a_url(self):
         tipo = classificar_documento("Apresentação", url="https://x/release-2t25.pdf")
         assert tipo is TD.APRESENTACAO
+
+
+class TestClassificacaoPeloIdentificador:
+    """Na Central o tipo do documento mora no `id` do controle ASP.NET.
+
+    O link é opaco (`Download.aspx?Arquivo=<token>`) e a âncora diz só "PDF".
+    O `id` — `..._linkArq_Release1T_0` — é a única declaração do servidor, no
+    markup, sobre o que aquele arquivo é. Sem ele sobra a posição na linha, e
+    deduzir tipo de documento por posição é adivinhar.
+    """
+
+    PREFIXO = "ContentInternal_ContentPlaceHolderConteudo_rptResultados_linkArq_"
+
+    @pytest.mark.parametrize(
+        "sufixo, esperado",
+        [
+            ("Release1T_0", TD.RELEASE_RESULTADOS),
+            ("Release4T_12", TD.RELEASE_RESULTADOS),
+            ("ITR1T_0", TD.ITR_DFP),
+            ("Apresentacao2T_3", TD.APRESENTACAO),
+            ("Audio3T_7", TD.AUDIO_TELECONFERENCIA),
+            ("Transcricao4T_9", TD.TRANSCRICAO),
+        ],
+    )
+    def test_reconhece_os_tipos_da_central(self, sufixo, esperado):
+        assert classificar_por_identificador(self.PREFIXO + sufixo) is esperado
+
+    def test_identificador_desconhecido_nao_vira_release(self):
+        assert classificar_por_identificador(self.PREFIXO + "Novidade1T_0") is (
+            TD.NAO_CLASSIFICADO
+        )
+
+    def test_identificador_vazio_nao_vira_release(self):
+        assert classificar_por_identificador("") is TD.NAO_CLASSIFICADO
+        assert classificar_por_identificador(None) is TD.NAO_CLASSIFICADO
+
+    def test_extrai_o_trimestre_do_identificador(self):
+        assert trimestre_do_identificador(self.PREFIXO + "Release3T_5") == 3
+
+    def test_trimestre_ausente_e_none(self):
+        assert trimestre_do_identificador("qualquer_coisa") is None
+
+
+class TestConfirmacaoPeloNomeDoServidor:
+    """O download traz, de graça, a declaração do servidor sobre o arquivo.
+
+    `Content-Disposition: filename="MGLU_ER_1T26_POR.pdf"` confirma tipo e
+    período sem nenhuma requisição extra. Confirmação que não bate não é
+    detalhe: significa que o token da Central aponta para outro documento.
+    """
+
+    def test_release_do_periodo_esperado_confirma(self):
+        ok, motivo = confirmar_release("MGLU_ER_1T26_POR.pdf", "1T26")
+        assert ok is True
+        assert motivo is None
+
+    def test_periodo_divergente_nao_confirma(self):
+        ok, motivo = confirmar_release("MGLU_ER_4T25_POR.pdf", "1T26")
+        assert ok is False
+        assert "4T25" in motivo and "1T26" in motivo
+
+    def test_outro_tipo_de_documento_nao_confirma(self):
+        ok, motivo = confirmar_release(
+            "1T26 - Demonstrações Financeiras (DFS) - Magalu.pdf", "1T26"
+        )
+        assert ok is False
+        assert motivo
+
+    def test_transcricao_da_teleconferencia_nao_confirma(self):
+        ok, motivo = confirmar_release("MGLU_Call_1T26_POR.pdf", "1T26")
+        assert ok is False
+
+    def test_servidor_sem_nome_nao_confirma_mas_explica(self):
+        ok, motivo = confirmar_release(None, "1T26")
+        assert ok is False
+        assert "não nomeou" in motivo
+
+    def test_nome_por_extenso_tambem_confirma(self):
+        ok, _ = confirmar_release("Release de Resultados 1T26.pdf", "1T26")
+        assert ok is True

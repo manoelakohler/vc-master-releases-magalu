@@ -91,7 +91,7 @@ Cada verificação vira uma linha na aba Auditoria, inclusive as que passaram.
 
 | `check_id` | Verifica |
 |---|---|
-| `sel_quantidade` | quantidade de documentos analisados = `N` pedido; se menor, diferença declarada no Resumo |
+| `sel_quantidade` | quantidade de **períodos** analisados = `N` pedido; documento duplicado não soma período e documento descartado não conta como analisado; se menor, diferença declarada no Resumo |
 | `sel_tipo` | todo documento analisado tem `tipo = release_resultados` |
 | `sel_periodos_unicos` | nenhum período fiscal duplicado entre os documentos |
 | `sel_ordenacao` | documentos e colunas em ordem cronológica crescente |
@@ -124,6 +124,7 @@ Cada verificação vira uma linha na aba Auditoria, inclusive as que passaram.
 |---|---|
 | `cmp_serie_integra` | nenhuma série mistura `métrica`, `segmento`, `base`, `periodicidade` ou `tipo_valor` |
 | `cmp_n_posicoes` | toda série tem exatamente `N` posições, sem deslocamento |
+| `cmp_ordem_series` | as posições de cada série estão em ordem cronológica crescente |
 | `cmp_denominador_zero` | nenhuma `variacao_pct` calculada sobre anterior = 0 |
 | `cmp_confianca_baixa` | nenhuma variação calculada com ponta de confiança baixa |
 | `cmp_texto` | séries `texto` não têm variação numérica |

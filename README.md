@@ -37,7 +37,7 @@ Python não faz chamadas a APIs de LLM. Disso decorre a arquitetura inteira.
                                         │
                                         ▼
          FASE C (Python)      valida contrato · séries · variações
-                              Excel (6 abas) · auditoria (~20 verificações)
+                              Excel (6 abas) · auditoria (32 verificações)
 ```
 
 O que a máquina fez é reproduzível byte a byte. O que exigiu leitura fica isolado num único
@@ -90,9 +90,8 @@ Lista **todas** as violações de contrato de uma vez. Só passa quando o arquiv
 .venv\Scripts\python.exe -m magalu_releases relatar --run runs\<run_id>
 ```
 
-Gera `analise_<run_id>.xlsx`, `resumo.md` e `auditoria.json`. Sai com código diferente de zero
-quando a auditoria encontra falha de severidade alta — a execução não pode ser apresentada
-como concluída nesse caso.
+Gera `analise_<run_id>.xlsx`, `resumo.md` e `auditoria.json`. Sai com código diferente de zero quando a auditoria encontra falha de severidade alta — a execução
+não pode ser apresentada como concluída nesse caso.
 
 ---
 
@@ -135,7 +134,7 @@ fórmula que recalcula pode divergir do que foi extraído e auditado.
 .venv\Scripts\python.exe -m pytest
 ```
 
-**404 testes, nenhum toca a rede.** A concentração é deliberada em `numeros`, `periodos`,
+**486 testes, nenhum toca a rede.** A concentração é deliberada em `numeros`, `periodos`,
 `series` e `variacoes`: é onde um erro passa despercebido até chegar na planilha.
 `tests/test_integracao.py` exercita a Fase C ponta a ponta.
 
@@ -154,7 +153,7 @@ src/magalu_releases/
   ├── saida/       excel · resumo · pendencias
   ├── auditoria/   checks
   └── cli.py
-tests/                        404 testes + fixtures sintéticas
+tests/                        486 testes + fixtures sintéticas
 runs/                         artefatos por execução (não versionado)
 .claude/skills/magalu-release-analysis/   o procedimento de análise
 CLAUDE.md                     regras permanentes do repositório
