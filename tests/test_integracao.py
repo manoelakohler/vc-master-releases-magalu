@@ -536,17 +536,25 @@ class TestRegistroDaPublicacao:
         assert "registrar-artefato" in saida
 
     def test_registro_preenche_url_e_data(self, execucao):
+        """O registro vale por si; o aviso que ele dispara tem desfecho próprio.
+
+        Sem credencial no ambiente o e-mail falha, e isso fica gravado — mas o
+        artefato continua registrado. Confundir os dois transformaria um
+        artefato publicado com sucesso em execução com erro.
+        """
         from magalu_releases.cli import comando_registrar_artefato
 
         comando_relatar(str(execucao), cfg=carregar_config())
         codigo = comando_registrar_artefato(
-            str(execucao), "https://claude.ai/public/artifacts/abc-123"
+            str(execucao), "https://claude.ai/public/artifacts/abc-123",
+            credenciais=(None, None),
         )
         registro = self._publicacao(execucao)
         assert codigo == 0
         assert registro["estado"] == "publicado"
         assert registro["url"] == "https://claude.ai/public/artifacts/abc-123"
         assert registro["publicado_em"]
+        assert registro["email"]["estado"] == "falhou"
 
     def test_url_fora_do_destino_conhecido_e_recusada(self, execucao, capsys):
         from magalu_releases.cli import comando_registrar_artefato
@@ -564,3 +572,107 @@ class TestRegistroDaPublicacao:
         )
         assert codigo != 0
         assert "publicacao.json" in capsys.readouterr().out
+
+
+class TestAvisoPorEmail:
+    """O aviso de conclusão fecha o processo, e fecha dizendo a verdade.
+
+    O envio sai para a rede, então o transporte é injetado: o teste conta o que
+    teria sido enviado, sem abrir socket. O disparo fica no registro do
+    artefato porque é aí que o link passa a existir — avisar antes seria
+    mandar um e-mail apontando para lugar nenhum.
+    """
+
+    URL = "https://claude.ai/artifact/abc-123"
+
+    class TransporteFalso:
+        def __init__(self, erro=None):
+            self.erro = erro
+            self.enviadas = []
+
+        def __call__(self, mensagem, **kwargs):
+            if self.erro:
+                raise self.erro
+            self.enviadas.append(mensagem)
+
+    def _preparar(self, execucao):
+        comando_relatar(str(execucao), cfg=carregar_config())
+        return execucao
+
+    def _estado(self, execucao):
+        return json.loads((execucao / "publicacao.json").read_text(encoding="utf-8"))
+
+    def test_relatar_guarda_o_que_o_aviso_precisa(self, execucao):
+        self._preparar(execucao)
+        resumo = self._estado(execucao)["resumo"]
+        assert resumo["rotulos"] == ["1T26", "2T26"]
+        assert resumo["verificacoes"] > 0
+        assert resumo["falhas"] == 0
+        assert "pendencias" in resumo
+
+    def test_registrar_artefato_dispara_o_aviso(self, execucao):
+        from magalu_releases.cli import comando_registrar_artefato
+
+        self._preparar(execucao)
+        transporte = self.TransporteFalso()
+        codigo = comando_registrar_artefato(
+            str(execucao), self.URL,
+            credenciais=("conta@exemplo", "segredo"), transporte=transporte,
+        )
+        assert codigo == 0
+        assert len(transporte.enviadas) == 1
+        assert self.URL in transporte.enviadas[0].corpo
+        assert transporte.enviadas[0].destinatario == "prof.manoela@ica.ele.puc-rio.br"
+
+    def test_estado_do_envio_fica_gravado(self, execucao):
+        from magalu_releases.cli import comando_registrar_artefato
+
+        self._preparar(execucao)
+        comando_registrar_artefato(
+            str(execucao), self.URL,
+            credenciais=("conta@exemplo", "segredo"),
+            transporte=self.TransporteFalso(),
+        )
+        email = self._estado(execucao)["email"]
+        assert email["estado"] == "enviado"
+        assert email["destinatario"] == "prof.manoela@ica.ele.puc-rio.br"
+        assert email["enviado_em"]
+
+    def test_falha_de_envio_e_declarada_e_nao_finge_sucesso(self, execucao, capsys):
+        from magalu_releases.cli import comando_notificar
+
+        self._preparar(execucao)
+        codigo = comando_notificar(
+            str(execucao),
+            credenciais=("conta@exemplo", "segredo"),
+            transporte=self.TransporteFalso(erro=OSError("conexão recusada")),
+        )
+        assert codigo != 0
+        assert "conexão recusada" in capsys.readouterr().out
+        assert self._estado(execucao)["email"]["estado"] == "falhou"
+
+    def test_sem_credencial_nao_envia_e_explica(self, execucao, capsys):
+        from magalu_releases.cli import comando_notificar
+
+        self._preparar(execucao)
+        transporte = self.TransporteFalso()
+        codigo = comando_notificar(
+            str(execucao), credenciais=(None, None), transporte=transporte
+        )
+        assert codigo != 0
+        assert "MAGALU_SMTP_USUARIO" in capsys.readouterr().out
+        assert transporte.enviadas == []
+
+    def test_reenvio_avulso_funciona_depois_da_falha(self, execucao):
+        from magalu_releases.cli import comando_notificar
+
+        self._preparar(execucao)
+        comando_notificar(
+            str(execucao), credenciais=("c", "s"),
+            transporte=self.TransporteFalso(erro=OSError("timeout")),
+        )
+        transporte = self.TransporteFalso()
+        assert comando_notificar(
+            str(execucao), credenciais=("c", "s"), transporte=transporte
+        ) == 0
+        assert self._estado(execucao)["email"]["estado"] == "enviado"

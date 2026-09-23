@@ -139,6 +139,26 @@ de `relatar`, publique o HTML e amarre o link à execução:
 
 O artefato nasce privado; torná-lo público é ação de quem tem a conta.
 
+### Aviso de conclusão
+
+Registrar o artefato dispara um e-mail curto para o destinatário de `config/settings.toml`:
+períodos analisados, resultado da auditoria, pendências e o link do dashboard. Sai depois da
+publicação porque carrega o link.
+
+**A credencial vem do ambiente, nunca do repositório:**
+
+```powershell
+$env:MAGALU_SMTP_USUARIO = "conta@gmail.com"
+$env:MAGALU_SMTP_SENHA   = "<senha de app>"   # Gmail com 2FA exige senha de app
+```
+
+Envio que falha fica gravado como `falhou` em `publicacao.json`, com o motivo, e não invalida
+a entrega. Para repetir sem refazer a análise:
+
+```powershell
+.venv\Scripts\python.exe -m magalu_releases notificar --run runs\<run_id>
+```
+
 ---
 
 ## Regras que o código impõe
@@ -162,7 +182,7 @@ O artefato nasce privado; torná-lo público é ação de quem tem a conta.
 .venv\Scripts\python.exe -m pytest
 ```
 
-**520 testes, nenhum toca a rede.** A concentração é deliberada em `numeros`, `periodos`,
+**540 testes, nenhum toca a rede.** A concentração é deliberada em `numeros`, `periodos`,
 `series` e `variacoes`: é onde um erro passa despercebido até chegar na planilha.
 `tests/test_integracao.py` exercita a Fase C ponta a ponta.
 
@@ -178,10 +198,10 @@ src/magalu_releases/
   ├── extracao/    texto · dossie
   ├── fatos/       esquema (o portão)
   ├── analise/     series · variacoes
-  ├── saida/       excel · dashboard · resumo · pendencias
+  ├── saida/       excel · dashboard · notificacao · resumo · pendencias
   ├── auditoria/   checks
   └── cli.py
-tests/                        520 testes + fixtures sintéticas
+tests/                        540 testes + fixtures sintéticas
 runs/                         artefatos por execução (não versionado)
 .claude/skills/magalu-release-analysis/   o procedimento de análise
 CLAUDE.md                     regras permanentes do repositório

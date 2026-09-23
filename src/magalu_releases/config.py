@@ -49,11 +49,23 @@ class ConfigPdf:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfigEmail:
+    """Parâmetros do aviso. Credencial não entra aqui: vem do ambiente."""
+
+    ativo: bool
+    servidor: str
+    porta: int
+    usar_tls: bool
+    destinatario: str
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     execucao: ConfigExecucao
     fonte: ConfigFonte
     http: ConfigHttp
     pdf: ConfigPdf
+    email: ConfigEmail
     origem: Path
 
 
@@ -103,10 +115,22 @@ def carregar_config(caminho: Path | str | None = None) -> Config:
                 dados["pdf"]["minimo_paginas_textuais_proporcao"]
             ),
         )
+        email = ConfigEmail(
+            ativo=bool(dados["email"]["ativo"]),
+            servidor=str(dados["email"]["servidor"]),
+            porta=int(dados["email"]["porta"]),
+            usar_tls=bool(dados["email"]["usar_tls"]),
+            destinatario=str(dados["email"]["destinatario"]),
+        )
     except KeyError as exc:
         raise ConfigInvalida(f"Chave ausente na configuração {origem}: {exc}") from exc
 
     if execucao.n_padrao < 1:
         raise ConfigInvalida("execucao.n_padrao precisa ser >= 1")
 
-    return Config(execucao=execucao, fonte=fonte, http=http, pdf=pdf, origem=origem)
+    if email.ativo and "@" not in email.destinatario:
+        raise ConfigInvalida(f"email.destinatario inválido: {email.destinatario!r}")
+
+    return Config(
+        execucao=execucao, fonte=fonte, http=http, pdf=pdf, email=email, origem=origem
+    )

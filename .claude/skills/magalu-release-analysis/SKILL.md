@@ -311,6 +311,27 @@ O procedimento, depois de `relatar` aprovar a auditoria:
 O registro existe porque o link precisa sobreviver à conversa: sem ele, a pasta da execução
 deixa de explicar onde a página foi parar.
 
+## Aviso de conclusão
+
+O registro do artefato dispara um **aviso por e-mail** para o destinatário configurado. Ele
+sai depois da publicação, e não antes, porque carrega o link do dashboard — avisar antes
+seria mandar um e-mail apontando para lugar nenhum.
+
+O aviso é curto e **não esconde o desfavorável**: declara períodos analisados contra `N`
+pedido, resultado da auditoria com o número de falhas, pendências abertas e o link. Quando o
+dashboard não foi publicado, diz isso em vez de omitir a linha.
+
+Vale nele a mesma proibição de sempre: nada de recomendação de investimento, e a declaração
+de análise independente acompanha o corpo.
+
+Envio que falha **não é silenciado e não invalida a entrega**: fica gravado como `falhou`
+com o motivo, e `notificar --run <diretório>` repete o envio sem refazer a análise. O código
+de saída do registro do artefato continua sendo o do registro — artefato publicado com
+sucesso não vira execução com erro porque o servidor de e-mail estava fora.
+
+Credencial de SMTP vem do ambiente (`MAGALU_SMTP_USUARIO`, `MAGALU_SMTP_SENHA`), nunca do
+arquivo de configuração: `settings.toml` é versionado.
+
 **A página publicada leva linha de autoria.** Uma página pública com o nome da companhia e
 números dela pode ser lida como publicação oficial; a declaração de análise independente, com
 a fonte citada, é o que impede essa leitura.

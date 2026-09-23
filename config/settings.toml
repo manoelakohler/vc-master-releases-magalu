@@ -48,3 +48,13 @@ status_para_retentar = [403, 429, 500, 502, 503, 504]
 # Sem OCR: PDF digitalizado vira pendência (regra da skill).
 minimo_caracteres_por_pagina = 50
 minimo_paginas_textuais_proporcao = 0.5
+
+[email]
+# Aviso de conclusão. As credenciais NÃO moram aqui: vêm de
+# MAGALU_SMTP_USUARIO e MAGALU_SMTP_SENHA no ambiente. Segredo em arquivo
+# versionado vaza no primeiro push, e este repositório é público.
+ativo = true
+servidor = "smtp.gmail.com"
+porta = 587
+usar_tls = true
+destinatario = "prof.manoela@ica.ele.puc-rio.br"

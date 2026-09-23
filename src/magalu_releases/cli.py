@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import asdict
 from dataclasses import replace as replace_documento
@@ -41,12 +42,22 @@ from magalu_releases.fonte.selecao import selecionar_releases
 from magalu_releases.models import Documento, Pendencia
 from magalu_releases.saida.dashboard import gerar_dashboard, validar_dashboard
 from magalu_releases.saida.excel import gerar_excel, validar_planilha
+from magalu_releases.saida.notificacao import (
+    CredencialAusente,
+    EnvioFalhou,
+    enviar,
+    montar_mensagem,
+)
 from magalu_releases.saida.pendencias import (
     PendenciaInvalida,
     consolidar_pendencias,
     pendencia_de_dict,
 )
-from magalu_releases.saida.resumo import montar_esqueleto, validar_resumo
+from magalu_releases.saida.resumo import (
+    contar_periodos_analisados,
+    montar_esqueleto,
+    validar_resumo,
+)
 from magalu_releases.vocabularios import Gatilho, ResultadoCheck, Severidade
 
 
@@ -80,6 +91,11 @@ def construir_parser() -> argparse.ArgumentParser:
     )
     artefato.add_argument("--run", required=True, help="diretório da execução")
     artefato.add_argument("--url", required=True, help="URL do artefato publicado")
+
+    notificar = sub.add_parser(
+        "notificar", help="Envia o aviso de conclusão por e-mail (ou reenvia após falha)"
+    )
+    notificar.add_argument("--run", required=True, help="diretório da execução")
 
     return parser
 
@@ -482,21 +498,34 @@ def comando_relatar(diretorio: str, *, cfg=None) -> int:
     # declara que há uma página para publicar e guarda a URL quando ela existir,
     # para que a pasta continue explicando a si mesma meses depois.
     caminho_publicacao = execucao / "publicacao.json"
-    if not caminho_publicacao.is_file():
-        caminho_publicacao.write_text(
-            json.dumps(
-                {
-                    "run_id": manifesto["run_id"],
-                    "dashboard": dashboard.name,
-                    "estado": "pendente",
-                    "url": None,
-                    "publicado_em": None,
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
+    registro = (
+        json.loads(caminho_publicacao.read_text(encoding="utf-8"))
+        if caminho_publicacao.is_file()
+        else {"estado": "pendente", "url": None, "publicado_em": None}
+    )
+    registro.update(
+        {
+            "run_id": manifesto["run_id"],
+            "dashboard": dashboard.name,
+            # O que o aviso de conclusão precisa dizer, apurado aqui e não
+            # recalculado depois: o e-mail não pode contar uma execução
+            # diferente da que a planilha registrou.
+            "resumo": {
+                "rotulos": [rotulos[c] for c in periodos],
+                "n_pedido": manifesto["n_pedido"],
+                "n_obtido": contar_periodos_analisados(periodos, documentos),
+                "verificacoes": len(relatorio.verificacoes),
+                "falhas": len(
+                    [v for v in relatorio.verificacoes if v.resultado is ResultadoCheck.FAIL]
+                ),
+                "pendencias": len(pendencias),
+            },
+        }
+    )
+    registro.setdefault("email", {"estado": "pendente", "erro": None})
+    caminho_publicacao.write_text(
+        json.dumps(registro, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     contagem = relatorio.resumo_por_resultado()
     print(f"\nPlanilha: {destino}")
@@ -529,7 +558,89 @@ def comando_relatar(diretorio: str, *, cfg=None) -> int:
 _DESTINO_ARTEFATO = "claude.ai"
 
 
-def comando_registrar_artefato(diretorio: str, url: str) -> int:
+def comando_notificar(
+    diretorio: str, *, cfg=None, credenciais=None, transporte=None
+) -> int:
+    """Envia o aviso de conclusão e grava o desfecho na execução.
+
+    Separado de `relatar` porque o aviso carrega o link do dashboard, que só
+    existe depois da publicação — e porque envio que falha precisa poder ser
+    repetido sem refazer a análise inteira.
+    """
+    cfg = cfg or carregar_config()
+    execucao = Path(diretorio)
+    caminho = execucao / "publicacao.json"
+    if not caminho.is_file():
+        print(f"ERRO: publicacao.json não encontrado em {execucao}")
+        print("Rode `relatar` antes: é ele que apura o que o aviso informa.")
+        return 2
+
+    if not cfg.email.ativo:
+        print("Aviso por e-mail desativado em config/settings.toml. Nada enviado.")
+        return 0
+
+    registro = json.loads(caminho.read_text(encoding="utf-8"))
+    resumo = registro.get("resumo")
+    if not resumo:
+        print("ERRO: publicacao.json não traz o resumo da execução.")
+        print("Rode `relatar` novamente para reapurar os números do aviso.")
+        return 2
+
+    mensagem = montar_mensagem(
+        destinatario=cfg.email.destinatario,
+        run_id=registro["run_id"],
+        rotulos=resumo["rotulos"],
+        n_pedido=resumo["n_pedido"],
+        n_obtido=resumo["n_obtido"],
+        url_dashboard=registro.get("url"),
+        verificacoes=resumo["verificacoes"],
+        falhas=resumo["falhas"],
+        pendencias=resumo["pendencias"],
+    )
+
+    usuario, senha = credenciais if credenciais is not None else (
+        os.environ.get("MAGALU_SMTP_USUARIO"),
+        os.environ.get("MAGALU_SMTP_SENHA"),
+    )
+
+    print(f"\nAviso para {mensagem.destinatario}")
+    print(f"Assunto: {mensagem.assunto}")
+    for linha in mensagem.corpo.splitlines():
+        print(f"  {linha}")
+
+    def gravar(estado, erro=None):
+        registro["email"] = {
+            "estado": estado,
+            "destinatario": mensagem.destinatario,
+            "assunto": mensagem.assunto,
+            "enviado_em": (
+                datetime.now(timezone.utc).isoformat(timespec="seconds")
+                if estado == "enviado"
+                else None
+            ),
+            "erro": erro,
+        }
+        caminho.write_text(
+            json.dumps(registro, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    extras = {"transporte": transporte} if transporte is not None else {}
+    try:
+        enviar(mensagem, cfg.email, usuario=usuario, senha=senha, **extras)
+    except (CredencialAusente, EnvioFalhou) as erro:
+        print(f"ERRO ao enviar o aviso: {erro}")
+        print(f"O envio pode ser repetido com: notificar --run {execucao}")
+        gravar("falhou", str(erro))
+        return 2
+
+    gravar("enviado")
+    print("Aviso enviado.")
+    return 0
+
+
+def comando_registrar_artefato(
+    diretorio: str, url: str, *, cfg=None, credenciais=None, transporte=None
+) -> int:
     """Guarda na execução a URL do dashboard já publicado.
 
     Determinístico e sem rede: quem publica é o agente, com a ferramenta de
@@ -556,6 +667,14 @@ def comando_registrar_artefato(diretorio: str, url: str) -> int:
         json.dumps(registro, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(f"Artefato registrado em {caminho}: {endereco}")
+
+    # O aviso sai agora porque só agora o link existe. O código de saída
+    # continua sendo o do registro: aviso que falhou é problema do aviso, fica
+    # gravado como falhou e pode ser repetido — não desfaz o registro nem
+    # transforma um artefato publicado em execução com erro.
+    comando_notificar(
+        diretorio, cfg=cfg, credenciais=credenciais, transporte=transporte
+    )
     return 0
 
 
@@ -569,6 +688,8 @@ def main(argv=None) -> int:
         return comando_relatar(args.run)
     if args.comando == "registrar-artefato":
         return comando_registrar_artefato(args.run, args.url)
+    if args.comando == "notificar":
+        return comando_notificar(args.run)
     return 2
 
 
